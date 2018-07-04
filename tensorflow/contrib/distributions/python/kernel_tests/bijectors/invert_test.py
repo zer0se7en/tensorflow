@@ -19,11 +19,11 @@ from __future__ import division
 from __future__ import print_function
 
 from tensorflow.contrib.distributions.python.ops import bijectors
-from tensorflow.contrib.distributions.python.ops import gamma as gamma_lib
-from tensorflow.contrib.distributions.python.ops import transformed_distribution as transformed_distribution_lib
-from tensorflow.contrib.distributions.python.ops.bijectors import bijector_test_util
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops.distributions import gamma as gamma_lib
+from tensorflow.python.ops.distributions import transformed_distribution as transformed_distribution_lib
+from tensorflow.python.ops.distributions.bijector_test_util import assert_scalar_congruency
 from tensorflow.python.platform import test
 
 
@@ -34,12 +34,10 @@ class InvertBijectorTest(test.TestCase):
     with self.test_session():
       for fwd in [
           bijectors.Identity(),
-          bijectors.Exp(event_ndims=1),
-          bijectors.Affine(
-              shift=[0., 1.], scale_diag=[2., 3.], event_ndims=1),
-          bijectors.Softplus(event_ndims=1),
-          bijectors.SoftmaxCentered(event_ndims=1),
-          bijectors.SigmoidCentered(),
+          bijectors.Exp(),
+          bijectors.Affine(shift=[0., 1.], scale_diag=[2., 3.]),
+          bijectors.Softplus(),
+          bijectors.SoftmaxCentered(),
       ]:
         rev = bijectors.Invert(fwd)
         self.assertEqual("_".join(["invert", fwd.name]), rev.name)
@@ -48,23 +46,23 @@ class InvertBijectorTest(test.TestCase):
         self.assertAllClose(fwd.inverse(x).eval(), rev.forward(x).eval())
         self.assertAllClose(fwd.forward(x).eval(), rev.inverse(x).eval())
         self.assertAllClose(
-            fwd.forward_log_det_jacobian(x).eval(),
-            rev.inverse_log_det_jacobian(x).eval())
+            fwd.forward_log_det_jacobian(x, event_ndims=1).eval(),
+            rev.inverse_log_det_jacobian(x, event_ndims=1).eval())
         self.assertAllClose(
-            fwd.inverse_log_det_jacobian(x).eval(),
-            rev.forward_log_det_jacobian(x).eval())
+            fwd.inverse_log_det_jacobian(x, event_ndims=1).eval(),
+            rev.forward_log_det_jacobian(x, event_ndims=1).eval())
 
   def testScalarCongruency(self):
     with self.test_session():
       bijector = bijectors.Invert(bijectors.Exp())
-      bijector_test_util.assert_scalar_congruency(
+      assert_scalar_congruency(
           bijector, lower_x=1e-3, upper_x=1.5, rtol=0.05)
 
   def testShapeGetters(self):
     with self.test_session():
-      bijector = bijectors.Invert(bijectors.SigmoidCentered(validate_args=True))
+      bijector = bijectors.Invert(bijectors.SoftmaxCentered(validate_args=True))
       x = tensor_shape.TensorShape([2])
-      y = tensor_shape.TensorShape([])
+      y = tensor_shape.TensorShape([1])
       self.assertAllEqual(y, bijector.forward_event_shape(x))
       self.assertAllEqual(
           y.as_list(),

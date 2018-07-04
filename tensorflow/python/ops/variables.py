@@ -19,20 +19,26 @@ from __future__ import print_function
 
 from tensorflow.core.framework import attr_value_pb2
 from tensorflow.core.framework import variable_pb2
+from tensorflow.python.eager import context
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_shape
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
+from tensorflow.python.ops import gen_array_ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import state_ops
+from tensorflow.python.platform import tf_logging as logging
+from tensorflow.python.training.checkpointable import base as checkpointable
 from tensorflow.python.util import compat
+from tensorflow.python.util import tf_should_use
 from tensorflow.python.util.deprecation import deprecated
+from tensorflow.python.util.tf_export import tf_export
 
 
-class Variable(object):
-  """See the @{$variables$Variables How To} for a high
-  level overview.
+@tf_export("Variable")
+class Variable(checkpointable.CheckpointableBase):
+  """See the @{$variables$Variables How To} for a high level overview.
 
   A variable maintains state in the graph across calls to `run()`. You add a
   variable to the graph by constructing an instance of the class `Variable`.
@@ -116,6 +122,38 @@ class Variable(object):
   `trainable_variables()` returns the contents of this collection. The
   various `Optimizer` classes use this collection as the default list of
   variables to optimize.
+
+  WARNING: tf.Variable objects have a non-intuitive memory model. A Variable is
+  represented internally as a mutable Tensor which can non-deterministically
+  alias other Tensors in a graph. The set of operations which consume a Variable
+  and can lead to aliasing is undetermined and can change across TensorFlow
+  versions. Avoid writing code which relies on the value of a Variable either
+  changing or not changing as other operations happen. For example, using
+  Variable objects or simple functions thereof as predicates in a `tf.cond` is
+  dangerous and error-prone:
+
+  ```
+  v = tf.Variable(True)
+  tf.cond(v, lambda: v.assign(False), my_false_fn)  # Note: this is broken.
+  ```
+
+  Here replacing tf.Variable with tf.contrib.eager.Variable will fix any
+  nondeterminism issues.
+
+  To use the replacement for variables which does
+  not have these issues:
+
+  * Replace `tf.Variable` with `tf.contrib.eager.Variable`;
+  * Call `tf.get_variable_scope().set_use_resource(True)` inside a
+    `tf.variable_scope` before the `tf.get_variable()` call.
+
+  @compatibility(eager)
+  `tf.Variable` is not compatible with eager execution.  Use
+  `tf.contrib.eager.Variable` instead which is compatible with both eager
+  execution and graph construction.  See [the TensorFlow Eager Execution
+  guide](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/eager/python/g3doc/guide.md#variables-and-optimizers)
+  for details on how variables work in eager execution.
+  @end_compatibility
   """
 
   def __init__(self,
@@ -128,7 +166,8 @@ class Variable(object):
                variable_def=None,
                dtype=None,
                expected_shape=None,
-               import_scope=None):
+               import_scope=None,
+               constraint=None):
     """Creates a new variable with value `initial_value`.
 
     The new variable is added to the graph collections listed in `collections`,
@@ -163,8 +202,9 @@ class Variable(object):
       name: Optional name for the variable. Defaults to `'Variable'` and gets
         uniquified automatically.
       variable_def: `VariableDef` protocol buffer. If not `None`, recreates
-        the Variable object with its contents. `variable_def` and the other
-        arguments are mutually exclusive.
+        the Variable object with its contents, referencing the variable's nodes
+        in the graph, which must already exist. The graph is not changed.
+        `variable_def` and the other arguments are mutually exclusive.
       dtype: If set, initial_value will be converted to the given type.
         If `None`, either the datatype will be kept (if `initial_value` is
         a Tensor), or `convert_to_tensor` will decide.
@@ -172,12 +212,33 @@ class Variable(object):
         to have this shape.
       import_scope: Optional `string`. Name scope to add to the
         `Variable.` Only used when initializing from protocol buffer.
+      constraint: An optional projection function to be applied to the variable
+        after being updated by an `Optimizer` (e.g. used to implement norm
+        constraints or value constraints for layer weights). The function must
+        take as input the unprojected Tensor representing the value of the
+        variable and return the Tensor for the projected value
+        (which must have the same shape). Constraints are not safe to
+        use when doing asynchronous distributed training.
 
     Raises:
       ValueError: If both `variable_def` and initial_value are specified.
       ValueError: If the initial value is not specified, or does not have a
         shape and `validate_shape` is `True`.
+      RuntimeError: If eager execution is enabled.
+
+    @compatibility(eager)
+    `tf.Variable` is not compatible with eager execution.  Use
+    `tfe.Variable` instead which is compatible with both eager execution
+    and graph construction.  See [the TensorFlow Eager Execution
+    guide](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/eager/python/g3doc/guide.md#variables-and-optimizers)
+    for details on how variables work in eager execution.
+    @end_compatibility
     """
+    if context.executing_eagerly():
+      raise RuntimeError(
+          "tf.Variable not supported when eager execution is enabled. "
+          "Please use tf.contrib.eager.Variable instead")
+    self._in_graph_mode = True
     if variable_def:
       # If variable_def is provided, recreates the variable from its fields.
       if initial_value:
@@ -194,11 +255,17 @@ class Variable(object):
           caching_device=caching_device,
           name=name,
           dtype=dtype,
-          expected_shape=expected_shape)
+          expected_shape=expected_shape,
+          constraint=constraint)
 
   def __repr__(self):
-    return "<tf.Variable '%s' shape=%s dtype=%s>" % (
-            self.name, self.get_shape(), self.dtype.name)
+    if context.executing_eagerly() and not self._in_graph_mode:
+      return "<tf.Variable '%s' shape=%s dtype=%s, numpy=%s>" % (
+          self.name, self.get_shape(), self.dtype.name,
+          ops.numpy_text(self.read_value(), is_repr=True))
+    else:
+      return "<tf.Variable '%s' shape=%s dtype=%s>" % (
+          self.name, self.get_shape(), self.dtype.name)
 
   def _init_from_args(self,
                       initial_value=None,
@@ -208,7 +275,8 @@ class Variable(object):
                       caching_device=None,
                       name=None,
                       dtype=None,
-                      expected_shape=None):
+                      expected_shape=None,
+                      constraint=None):
     """Creates a new variable from arguments.
 
     Args:
@@ -216,7 +284,7 @@ class Variable(object):
         which is the initial value for the Variable. The initial value must have
         a shape specified unless `validate_shape` is set to False. Can also be a
         callable with no argument that returns the initial value when called.
-        (Note that initializer functions  from init_ops.py must first be bound
+        (Note that initializer functions from init_ops.py must first be bound
          to a shape before being used here.)
       trainable: If `True`, the default, also adds the variable to the graph
         collection `GraphKeys.TRAINABLE_VARIABLES`. This collection is used as
@@ -238,10 +306,18 @@ class Variable(object):
        a Tensor) or float32 will be used (if it is a Python object convertible
        to a Tensor).
       expected_shape: Deprecated. Ignored.
+      constraint: An optional projection function to be applied to the variable
+        after being updated by an `Optimizer` (e.g. used to implement norm
+        constraints or value constraints for layer weights). The function must
+        take as input the unprojected Tensor representing the value of the
+        variable and return the Tensor for the projected value
+        (which must have the same shape). Constraints are not safe to
+        use when doing asynchronous distributed training.
 
     Raises:
       ValueError: If the initial value is not specified, or does not have a
         shape and `validate_shape` is `True`.
+      RuntimeError: If lifted into the eager context.
     """
     _ = expected_shape
     if initial_value is None:
@@ -254,9 +330,26 @@ class Variable(object):
       raise ValueError(
           "collections argument to Variable constructor must be a list, tuple, "
           "or set. Got %s of type %s" % (collections, type(collections)))
+    if constraint is not None and not callable(constraint):
+      raise ValueError("The `constraint` argument must be a callable.")
+
+    # Store the graph key so optimizers know how to only retrieve variables from
+    # this graph.
+    self._graph_key = ops.get_default_graph()._graph_key  # pylint: disable=protected-access
+    if isinstance(initial_value, checkpointable.CheckpointInitialValue):
+      self._maybe_initialize_checkpointable()
+      self._update_uid = initial_value.checkpoint_position.restore_uid
+      initial_value = initial_value.wrapped_value
+
+    self._trainable = trainable
     if trainable and ops.GraphKeys.TRAINABLE_VARIABLES not in collections:
       collections = list(collections) + [ops.GraphKeys.TRAINABLE_VARIABLES]
-    with ops.control_dependencies(None):
+    with ops.init_scope():
+      # Ensure that we weren't lifted into the eager context.
+      if context.executing_eagerly():
+        raise RuntimeError(
+            "tf.Variable not supported when eager execution is enabled. "
+            "Please use tf.contrib.eager.Variable instead")
       with ops.name_scope(name, "Variable", [] if init_from_fn else
                           [initial_value]) as name:
 
@@ -264,13 +357,13 @@ class Variable(object):
           # Use attr_scope and device(None) to simulate the behavior of
           # colocate_with when the variable we want to colocate with doesn't
           # yet exist.
-          true_name = ops._name_from_scope_name(name)
+          true_name = ops._name_from_scope_name(name)  # pylint: disable=protected-access
           attr = attr_value_pb2.AttrValue(
               list=attr_value_pb2.AttrValue.ListValue(
                   s=[compat.as_bytes("loc:@%s" % true_name)]))
           # pylint: disable=protected-access
           with ops.get_default_graph()._attr_scope({"_class": attr}):
-            with ops.name_scope("Initializer"),  ops.device(None):
+            with ops.name_scope("Initializer"), ops.device(None):
               self._initial_value = ops.convert_to_tensor(
                   initial_value(), name="initial_value", dtype=dtype)
               shape = (self._initial_value.get_shape()
@@ -279,11 +372,20 @@ class Variable(object):
                 shape,
                 self._initial_value.dtype.base_dtype,
                 name=name)
+          # pylint: enable=protected-access
 
         # Or get the initial value from a Tensor or Python object.
         else:
           self._initial_value = ops.convert_to_tensor(
               initial_value, name="initial_value", dtype=dtype)
+          # pylint: disable=protected-access
+          if self._initial_value.op._get_control_flow_context() is not None:
+            raise ValueError(
+                "Initializer for variable %s is from inside a control-flow "
+                "construct, such as a loop or conditional. When creating a "
+                "variable inside a loop or conditional, use a lambda as the "
+                "initializer." % name)
+          # pylint: enable=protected-access
           shape = (self._initial_value.get_shape()
                    if validate_shape else tensor_shape.unknown_shape())
           # In this case, the variable op can't be created until after the
@@ -300,9 +402,13 @@ class Variable(object):
             raise ValueError("initial_value must have a shape specified: %s" %
                              self._initial_value)
 
-        # Assigns initial value.
+        # If 'initial_value' makes use of other variables, make sure we don't
+        # have an issue if these other variables aren't initialized first by
+        # using their initialized_value() method.
         self._initializer_op = state_ops.assign(
-            self._variable, self._initial_value,
+            self._variable,
+            self._try_guard_against_uninitialized_dependencies(
+                self._initial_value),
             validate_shape=validate_shape).op
 
         # TODO(vrv): Change this class to not take caching_device, but
@@ -314,16 +420,18 @@ class Variable(object):
         else:
           with ops.colocate_with(self._variable.op):
             self._snapshot = array_ops.identity(self._variable, name="read")
+      ops.add_to_collections(collections, self)
 
-    ops.add_to_collections(collections, self)
     self._caching_device = caching_device
     self._save_slice_info = None
+    self._constraint = constraint
 
   def _init_from_proto(self, variable_def, import_scope=None):
-    """Creates a new variable from `VariableDef` protocol buffer.
+    """Recreates the Variable object from a `VariableDef` protocol buffer.
 
     Args:
-      variable_def: `VariableDef` protocol buffer.
+      variable_def: `VariableDef` protocol buffer, describing a variable
+          whose nodes already exists in the graph.
       import_scope: Optional `string`. Name scope to add.
     """
     assert isinstance(variable_def, variable_pb2.VariableDef)
@@ -335,15 +443,26 @@ class Variable(object):
     self._initializer_op = g.as_graph_element(
         ops.prepend_name_scope(variable_def.initializer_name,
                                import_scope=import_scope))
+    # Tests whether initial_value_name exists first for backwards compatibility.
+    if (hasattr(variable_def, "initial_value_name") and
+        variable_def.initial_value_name):
+      self._initial_value = g.as_graph_element(
+          ops.prepend_name_scope(variable_def.initial_value_name,
+                                 import_scope=import_scope))
+    else:
+      self._initial_value = None
+    self._trainable = getattr(variable_def, "trainable", True)
     self._snapshot = g.as_graph_element(
         ops.prepend_name_scope(variable_def.snapshot_name,
                                import_scope=import_scope))
     if variable_def.HasField("save_slice_info_def"):
       self._save_slice_info = Variable.SaveSliceInfo(
-          save_slice_info_def=variable_def.save_slice_info_def)
+          save_slice_info_def=variable_def.save_slice_info_def,
+          import_scope=import_scope)
     else:
       self._save_slice_info = None
     self._caching_device = None
+    self._constraint = None
 
   def _as_graph_element(self):
     """Conversion function for Graph.as_graph_element()."""
@@ -426,6 +545,10 @@ class Variable(object):
     self._ref().set_shape(shape)
     self.value().set_shape(shape)
 
+  @property
+  def trainable(self):
+    return self._trainable
+
   def eval(self, session=None):
     """In a session, computes and returns the value of this variable.
 
@@ -464,10 +587,6 @@ class Variable(object):
     You should use this instead of the variable itself to initialize another
     variable with a value that depends on the value of this variable.
 
-    Beware of using initialized_value except during initialization:
-    initialized_value causes the Variable's initializer op to be run, so running
-    this op resets the variable to the initial value.
-
     ```python
     # Initialize 'v' with a random tensor.
     v = tf.Variable(tf.truncated_normal([10, 40]))
@@ -481,17 +600,10 @@ class Variable(object):
       A `Tensor` holding the value of this variable after its initializer
       has run.
     """
-    with ops.control_dependencies(None):
-      with ops.control_dependencies([self._initializer_op]):
-        # TODO(vrv): Change this class to not take caching_device, but
-        # to take the op to colocate the snapshot with, so we can use
-        # colocation rather than devices.
-        if self._caching_device is not None:
-          with ops.device(self._caching_device):
-            return array_ops.identity(self._variable)
-        else:
-          with ops.colocate_with(self._variable.op):
-            return array_ops.identity(self._variable)
+    with ops.init_scope():
+      return control_flow_ops.cond(is_variable_initialized(self),
+                                   self.read_value,
+                                   lambda: self.initial_value)
 
   @property
   def initial_value(self):
@@ -506,6 +618,16 @@ class Variable(object):
       A `Tensor`.
     """
     return self._initial_value
+
+  @property
+  def constraint(self):
+    """Returns the constraint function associated with this variable.
+
+    Returns:
+      The constraint function that was passed to the variable constructor.
+      Can be `None` if no constraint was passed.
+    """
+    return self._constraint
 
   def assign(self, value, use_locking=False):
     """Assigns a new value to the variable.
@@ -577,6 +699,29 @@ class Variable(object):
         sparse_delta.values,
         use_locking=use_locking)
 
+  def _strided_slice_assign(self,
+                            begin,
+                            end,
+                            strides,
+                            value,
+                            name,
+                            begin_mask,
+                            end_mask,
+                            ellipsis_mask,
+                            new_axis_mask,
+                            shrink_axis_mask):
+    return gen_array_ops.strided_slice_assign(ref=self._ref(),
+                                              begin=begin,
+                                              end=end,
+                                              strides=strides,
+                                              value=value,
+                                              name=name,
+                                              begin_mask=begin_mask,
+                                              end_mask=end_mask,
+                                              ellipsis_mask=ellipsis_mask,
+                                              new_axis_mask=new_axis_mask,
+                                              shrink_axis_mask=shrink_axis_mask)
+
   def count_up_to(self, limit):
     """Increments this variable until it reaches `limit`.
 
@@ -600,7 +745,7 @@ class Variable(object):
     return state_ops.count_up_to(self._variable, limit=limit)
 
   def load(self, value, session=None):
-    """Load new value into this variable
+    """Load new value into this variable.
 
     Writes new value to variable's memory. Doesn't add ops to the graph.
 
@@ -632,12 +777,15 @@ class Variable(object):
     Raises:
         ValueError: Session is not passed and no default session
     """
-    session = session or ops.get_default_session()
-    if session is None:
-      raise ValueError(
-          "Either session argument should be provided or default session "
-          "should be established")
-    session.run(self._initializer_op, {self._initializer_op.inputs[1]: value})
+    if context.executing_eagerly():
+      self.assign(value)
+    else:
+      session = session or ops.get_default_session()
+      if session is None:
+        raise ValueError(
+            "Either session argument should be provided or default session "
+            "should be established")
+      session.run(self._initializer_op, {self._initializer_op.inputs[1]: value})
 
   # Conversion to tensor.
   @staticmethod
@@ -684,6 +832,147 @@ class Variable(object):
 
     setattr(Variable, operator, _run_op)
 
+  def _gather_saveables_for_checkpoint(self):
+    """For implementing `Checkpointable`. This object is saveable on its own."""
+    return {checkpointable.VARIABLE_VALUE_KEY: self}
+
+  def _try_guard_against_uninitialized_dependencies(self, initial_value):
+    """Attempt to guard against dependencies on uninitialized variables.
+
+    Replace references to variables in `initial_value` with references to the
+    variable's initialized values. The initialized values are essentially
+    conditional TensorFlow graphs that return a variable's value if it is
+    initialized or its `initial_value` if it hasn't been initialized. This
+    replacement is done on a best effort basis:
+
+    - If the `initial_value` graph contains cycles, we don't do any
+      replacements for that graph.
+    - If the variables that `initial_value` depends on are not present in the
+      `GLOBAL_VARIABLES` or `LOCAL_VARIABLES` we don't replace them.
+
+    In these cases, it is up to the caller to ensure that the `initial_value`
+    graph uses initialized variables or that they guard access to variables
+    using their `initialized_value` method.
+
+    Args:
+      initial_value: `Tensor`. The initial value.
+    Returns:
+      A `Tensor` suitable to initialize a variable.
+    Raises:
+      TypeError: If `initial_value` is not a `Tensor`.
+    """
+    if not isinstance(initial_value, ops.Tensor):
+      raise TypeError("initial_value needs to be a Tensor: %s" % initial_value)
+
+    # Don't modify initial_value if it contains any cyclic dependencies.
+    def has_cycle(op, path):
+      """Detect cycles in the dependencies of `initial_value`."""
+      if op.name in path:
+        return True
+      path.add(op.name)
+      for op_input in op.inputs:
+        if has_cycle(op_input.op, path):
+          return True
+      for op_control_input in op.control_inputs:
+        if has_cycle(op_control_input, path):
+          return True
+      path.remove(op.name)
+      return False
+    if has_cycle(initial_value.op, path=set()):
+      return initial_value
+
+    return self._safe_initial_value_from_tensor(initial_value, op_cache={})
+
+  def _safe_initial_value_from_tensor(self, tensor, op_cache):
+    """Replace dependencies on variables with their initialized values.
+
+    Args:
+      tensor: A `Tensor`. The tensor to replace.
+      op_cache: A dict mapping operation names to `Operation`s. Used to memoize
+        the results so as to avoid creating redundant operations.
+    Returns:
+      A `Tensor` compatible with `tensor`. Any inputs that lead to variable
+      values will be replaced with a corresponding graph that uses the
+      variable's initialized values. This is done on a best-effort basis. If no
+      modifications need to be made then `tensor` will be returned unchanged.
+    """
+    op = tensor.op
+    new_op = op_cache.get(op.name)
+    if new_op is None:
+      new_op = self._safe_initial_value_from_op(op, op_cache)
+      op_cache[op.name] = new_op
+    return new_op.outputs[tensor.value_index]
+
+  def _safe_initial_value_from_op(self, op, op_cache):
+    """Replace dependencies on variables with their initialized values.
+
+    Args:
+      op: An `Operation`. The operation to replace.
+      op_cache: A dict mapping operation names to `Operation`s. Used to memoize
+        the results so as to avoid creating redundant operations.
+    Returns:
+      An `Operation` compatible with `op`. Any inputs that lead to variable
+      values will be replaced with a corresponding graph that uses the
+      variable's initialized values. This is done on a best-effort basis. If no
+      modifications need to be made then `op` will be returned unchanged.
+    """
+    op_type = op.node_def.op
+    if op_type in ("IsVariableInitialized", "VarIsInitializedOp",
+                   "ReadVariableOp"):
+      return op
+
+    # Attempt to find the initialized_value of any variable reference / handles.
+    # TODO(b/70206927): Fix handling of ResourceVariables.
+    if op_type in ("Variable", "VariableV2", "VarHandleOp"):
+      initialized_value = self._find_initialized_value_for_variable(op)
+      return op if initialized_value is None else initialized_value.op
+
+    # Recursively build initializer expressions for inputs.
+    modified = False
+    new_op_inputs = []
+    for op_input in op.inputs:
+      new_op_input = self._safe_initial_value_from_tensor(op_input, op_cache)
+      new_op_inputs.append(new_op_input)
+      modified = modified or (new_op_input != op_input)
+
+    # If at least one input was modified, replace the op.
+    if modified:
+      new_op_type = op_type
+      if new_op_type == "RefSwitch":
+        new_op_type = "Switch"
+      new_op_name = op.node_def.name + "_" + self.name
+      new_op_name = new_op_name.replace(":", "_")
+      return self.graph.create_op(
+          new_op_type, new_op_inputs,
+          op._output_types,  # pylint: disable=protected-access
+          name=new_op_name, attrs=op.node_def.attr)
+
+    return op
+
+  def _find_initialized_value_for_variable(self, variable_op):
+    """Find the initialized value for a variable op.
+
+    To do so, lookup the variable op in the variables collection.
+
+    Args:
+      variable_op: A variable `Operation`.
+    Returns:
+      A `Tensor` representing the initialized value for the variable or `None`
+      if the initialized value could not be found.
+    """
+    try:
+      var_names = [variable_op.node_def.name, variable_op.node_def.name + ":0"]
+      for collection_name in (ops.GraphKeys.GLOBAL_VARIABLES,
+                              ops.GraphKeys.LOCAL_VARIABLES):
+        for var in self.graph.get_collection(collection_name):
+          if var.name in var_names:
+            return var.initialized_value()
+    except AttributeError:
+      # Return None when an incomplete user-defined variable type was put in
+      # the collection.
+      return None
+    return None
+
   # NOTE(mrry): This enables the Variable's overloaded "right" binary
   # operators to run when the left operand is an ndarray, because it
   # accords the Variable class higher priority than an ndarray, or a
@@ -697,6 +986,18 @@ class Variable(object):
   def name(self):
     """The name of this variable."""
     return self._variable.name
+
+  @property
+  def _shared_name(self):
+    """The shared name of the variable.
+
+      Unlike name(), shared_name doesn't have ":0" suffix. It is user-specified
+      name with name scope prefix.
+
+    Returns:
+      variable name.
+    """
+    return self.name[:-2]
 
   @property
   def initializer(self):
@@ -723,13 +1024,18 @@ class Variable(object):
     """The `Graph` of this variable."""
     return self._variable.graph
 
-  def get_shape(self):
+  @property
+  def shape(self):
     """The `TensorShape` of this variable.
 
     Returns:
       A `TensorShape`.
     """
     return self._variable.get_shape()
+
+  def get_shape(self):
+    """Alias of Variable.shape."""
+    return self.shape
 
   def to_proto(self, export_scope=None):
     """Converts a `Variable` to a `VariableDef` protocol buffer.
@@ -746,6 +1052,11 @@ class Variable(object):
       var_def = variable_pb2.VariableDef()
       var_def.variable_name = ops.strip_name_scope(
           self._variable.name, export_scope)
+      if self._initial_value is not None:
+        # For backwards compatibility.
+        var_def.initial_value_name = ops.strip_name_scope(
+            self._initial_value.name, export_scope)
+      var_def.trainable = self.trainable
       var_def.initializer_name = ops.strip_name_scope(
           self.initializer.name, export_scope)
       var_def.snapshot_name = ops.strip_name_scope(
@@ -762,6 +1073,62 @@ class Variable(object):
     """Returns a `Variable` object created from `variable_def`."""
     return Variable(variable_def=variable_def,
                     import_scope=import_scope)
+
+  def __iadd__(self, other):
+    logging.log_first_n(
+        logging.WARN,
+        "Variable += will be deprecated. Use variable.assign_add"
+        " if you want assignment to the variable value or 'x = x + y'"
+        " if you want a new python Tensor object.", 1)
+    return self + other
+
+  def __isub__(self, other):
+    logging.log_first_n(
+        logging.WARN,
+        "Variable -= will be deprecated. Use variable.assign_sub"
+        " if you want assignment to the variable value or 'x = x - y'"
+        " if you want a new python Tensor object.", 1)
+    return self - other
+
+  def __imul__(self, other):
+    logging.log_first_n(
+        logging.WARN,
+        "Variable *= will be deprecated. Use `var.assign(var * other)`"
+        " if you want assignment to the variable value or `x = x * y`"
+        " if you want a new python Tensor object.", 1)
+    return self * other
+
+  def __idiv__(self, other):
+    logging.log_first_n(
+        logging.WARN,
+        "Variable /= will be deprecated. Use `var.assign(var / other)`"
+        " if you want assignment to the variable value or `x = x / y`"
+        " if you want a new python Tensor object.", 1)
+    return self / other
+
+  def __itruediv__(self, other):
+    logging.log_first_n(
+        logging.WARN,
+        "Variable /= will be deprecated. Use `var.assign(var / other)`"
+        " if you want assignment to the variable value or `x = x / y`"
+        " if you want a new python Tensor object.", 1)
+    return self / other
+
+  def __irealdiv__(self, other):
+    logging.log_first_n(
+        logging.WARN,
+        "Variable /= will be deprecated. Use `var.assign(var / other)`"
+        " if you want assignment to the variable value or `x = x / y`"
+        " if you want a new python Tensor object.", 1)
+    return self / other
+
+  def __ipow__(self, other):
+    logging.log_first_n(
+        logging.WARN,
+        "Variable **= will be deprecated. Use `var.assign(var ** other)`"
+        " if you want assignment to the variable value or `x = x ** y`"
+        " if you want a new python Tensor object.", 1)
+    return self ** other
 
   class SaveSliceInfo(object):
     """Information on how to save this Variable as a slice.
@@ -860,7 +1227,16 @@ class Variable(object):
 
 
 class PartitionedVariable(object):
-  """A container for partitioned `Variable` objects."""
+  """A container for partitioned `Variable` objects.
+
+  @compatibility(eager) `tf.PartitionedVariable` is not compatible with
+  eager execution.  Use `tfe.Variable` instead which is compatible
+  with both eager execution and graph construction.  See [the
+  TensorFlow Eager Execution
+  guide](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/contrib/eager/python/g3doc/guide.md#variables-and-optimizers)
+  for details on how variables work in eager execution.
+  @end_compatibility
+  """
 
   class PartitionedVariableIterator(object):
     """An iterator that allows accessing the underlying `Variable` objects.
@@ -909,7 +1285,11 @@ class PartitionedVariable(object):
         `partitions` is not a list.
       ValueError: If `variable_list` is empty, or the `Variable` shape
         information does not match `shape`, or `partitions` has invalid values.
+      RuntimeError: If eager execution is enabled
     """
+    if context.executing_eagerly():
+      raise RuntimeError(
+          "tf.PartitionedVariable not supported with eager execution enabled.")
     if not isinstance(variable_list, (list, tuple)):
       raise TypeError(
           "variable_list is not a list or tuple: %s" % variable_list)
@@ -1039,7 +1419,8 @@ class PartitionedVariable(object):
         "assign() has not been implemented for PartitionedVariable.")
 
 
-def global_variables():
+@tf_export("global_variables")
+def global_variables(scope=None):
   """Returns global variables.
 
   Global variables are variables that are shared across machines in a
@@ -1051,30 +1432,46 @@ def global_variables():
   An alternative to global variables are local variables. See
   @{tf.local_variables}
 
+  Args:
+    scope: (Optional.) A string. If supplied, the resulting list is filtered
+      to include only items whose `name` attribute matches `scope` using
+      `re.match`. Items without a `name` attribute are never returned if a
+      scope is supplied. The choice of `re.match` means that a `scope` without
+      special tokens filters by prefix.
+
   Returns:
     A list of `Variable` objects.
   """
-  return ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES)
+  return ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES, scope)
 
 
+@tf_export("all_variables")
 @deprecated("2017-03-02", "Please use tf.global_variables instead.")
 def all_variables():
   """See `tf.global_variables`."""
   return global_variables()
 
 
-def _all_saveable_objects():
+def _all_saveable_objects(scope=None):
   """Returns all variables and `SaveableObject`s that must be checkpointed.
+
+  Args:
+    scope: (Optional.) A string. If supplied, the resulting list is filtered
+      to include only items whose `name` attribute matches `scope` using
+      `re.match`. Items without a `name` attribute are never returned if a
+      scope is supplied. The choice of `re.match` means that a `scope` without
+      special tokens filters by prefix.
 
   Returns:
     A list of `Variable` and `SaveableObject` to be checkpointed
   """
   # TODO(andreasst): make this function public once things are settled.
-  return (ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES) +
-          ops.get_collection(ops.GraphKeys.SAVEABLE_OBJECTS))
+  return (ops.get_collection(ops.GraphKeys.GLOBAL_VARIABLES, scope) +
+          ops.get_collection(ops.GraphKeys.SAVEABLE_OBJECTS, scope))
 
 
-def local_variables():
+@tf_export("local_variables")
+def local_variables(scope=None):
   """Returns local variables.
 
   Local variables - per process variables, usually not saved/restored to
@@ -1088,22 +1485,38 @@ def local_variables():
   An alternative to local variables are global variables. See
   @{tf.global_variables}
 
+  Args:
+    scope: (Optional.) A string. If supplied, the resulting list is filtered
+      to include only items whose `name` attribute matches `scope` using
+      `re.match`. Items without a `name` attribute are never returned if a
+      scope is supplied. The choice of `re.match` means that a `scope` without
+      special tokens filters by prefix.
+
   Returns:
     A list of local `Variable` objects.
   """
-  return ops.get_collection(ops.GraphKeys.LOCAL_VARIABLES)
+  return ops.get_collection(ops.GraphKeys.LOCAL_VARIABLES, scope)
 
 
-def model_variables():
+@tf_export("model_variables")
+def model_variables(scope=None):
   """Returns all variables in the MODEL_VARIABLES collection.
+
+  Args:
+    scope: (Optional.) A string. If supplied, the resulting list is filtered
+      to include only items whose `name` attribute matches `scope` using
+      `re.match`. Items without a `name` attribute are never returned if a
+      scope is supplied. The choice of `re.match` means that a `scope` without
+      special tokens filters by prefix.
 
   Returns:
     A list of local Variable objects.
   """
-  return ops.get_collection(ops.GraphKeys.MODEL_VARIABLES)
+  return ops.get_collection(ops.GraphKeys.MODEL_VARIABLES, scope)
 
 
-def trainable_variables():
+@tf_export("trainable_variables")
+def trainable_variables(scope=None):
   """Returns all variables created with `trainable=True`.
 
   When passed `trainable=True`, the `Variable()` constructor automatically
@@ -1111,13 +1524,21 @@ def trainable_variables():
   `GraphKeys.TRAINABLE_VARIABLES`. This convenience function returns the
   contents of that collection.
 
+  Args:
+    scope: (Optional.) A string. If supplied, the resulting list is filtered
+      to include only items whose `name` attribute matches `scope` using
+      `re.match`. Items without a `name` attribute are never returned if a
+      scope is supplied. The choice of `re.match` means that a `scope` without
+      special tokens filters by prefix.
+
   Returns:
     A list of Variable objects.
   """
-  return ops.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES)
+  return ops.get_collection(ops.GraphKeys.TRAINABLE_VARIABLES, scope)
 
 
-def moving_average_variables():
+@tf_export("moving_average_variables")
+def moving_average_variables(scope=None):
   """Returns all variables that maintain their moving averages.
 
   If an `ExponentialMovingAverage` object is created and the `apply()`
@@ -1125,12 +1546,20 @@ def moving_average_variables():
   be added to the `GraphKeys.MOVING_AVERAGE_VARIABLES` collection.
   This convenience function returns the contents of that collection.
 
+  Args:
+    scope: (Optional.) A string. If supplied, the resulting list is filtered
+      to include only items whose `name` attribute matches `scope` using
+      `re.match`. Items without a `name` attribute are never returned if a
+      scope is supplied. The choice of `re.match` means that a `scope` without
+      special tokens filters by prefix.
+
   Returns:
     A list of Variable objects.
   """
-  return ops.get_collection(ops.GraphKeys.MOVING_AVERAGE_VARIABLES)
+  return ops.get_collection(ops.GraphKeys.MOVING_AVERAGE_VARIABLES, scope)
 
 
+@tf_export("initializers.variables", "variables_initializer")
 def variables_initializer(var_list, name="init"):
   """Returns an Op that initializes a list of variables.
 
@@ -1151,51 +1580,65 @@ def variables_initializer(var_list, name="init"):
   Returns:
     An Op that run the initializers of all the specified variables.
   """
-  if var_list:
+  if var_list and not context.executing_eagerly():
     return control_flow_ops.group(*[v.initializer for v in var_list], name=name)
   return control_flow_ops.no_op(name=name)
 
 
+@tf_export("initialize_variables")
+@tf_should_use.should_use_result
 @deprecated("2017-03-02", "Use `tf.variables_initializer` instead.")
 def initialize_variables(var_list, name="init"):
   """See `tf.variables_initializer`."""
   return variables_initializer(var_list, name=name)
 
 
+@tf_export("initializers.global_variables", "global_variables_initializer")
 def global_variables_initializer():
   """Returns an Op that initializes global variables.
 
-  This is just a shortcut for `variable_initializers(global_variables())`
+  This is just a shortcut for `variables_initializer(global_variables())`
 
   Returns:
     An Op that initializes global variables in the graph.
   """
+  if context.executing_eagerly():
+    return control_flow_ops.no_op(name="global_variables_initializer")
   return variables_initializer(global_variables())
 
 
+@tf_export("initialize_all_variables")
+@tf_should_use.should_use_result
 @deprecated("2017-03-02", "Use `tf.global_variables_initializer` instead.")
 def initialize_all_variables():
   """See `tf.global_variables_initializer`."""
   return global_variables_initializer()
 
 
+@tf_export("initializers.local_variables", "local_variables_initializer")
 def local_variables_initializer():
   """Returns an Op that initializes all local variables.
 
-  This is just a shortcut for `variable_initializers(local_variables())`
+  This is just a shortcut for `variables_initializer(local_variables())`
 
   Returns:
     An Op that initializes all local variables in the graph.
   """
+  if context.executing_eagerly():
+    return control_flow_ops.no_op(name="local_variables_initializer")
   return variables_initializer(local_variables())
 
 
+@tf_export("initialize_local_variables")
+@tf_should_use.should_use_result
 @deprecated("2017-03-02", "Use `tf.local_variables_initializer` instead.")
 def initialize_local_variables():
   """See `tf.local_variables_initializer`."""
   return local_variables_initializer()
 
 
+@tf_export("is_variable_initialized")
+@tf_should_use.should_use_result
 def is_variable_initialized(variable):
   """Tests if a variable has been initialized.
 
@@ -1209,6 +1652,8 @@ def is_variable_initialized(variable):
   return state_ops.is_variable_initialized(variable)
 
 
+@tf_export("assert_variables_initialized")
+@tf_should_use.should_use_result
 def assert_variables_initialized(var_list=None):
   """Returns an Op to check if variables are initialized.
 
@@ -1250,6 +1695,8 @@ def assert_variables_initialized(var_list=None):
       return array_ops.stack(ranks)
 
 
+@tf_export("report_uninitialized_variables")
+@tf_should_use.should_use_result
 def report_uninitialized_variables(var_list=None,
                                    name="report_uninitialized_variables"):
   """Adds ops to list the names of uninitialized variables.
@@ -1275,23 +1722,25 @@ def report_uninitialized_variables(var_list=None,
         if op.type in ["Variable", "VariableV2", "AutoReloadVariable"]:
           var_list.append(op.outputs[0])
   with ops.name_scope(name):
-    if not var_list:
-      # Return an empty tensor so we only need to check for returned tensor
-      # size being 0 as an indication of model ready.
-      return array_ops.constant([], dtype=dtypes.string)
-    else:
-      # Get a 1-D boolean tensor listing whether each variable is initialized.
-      variables_mask = math_ops.logical_not(
-          array_ops.stack(
-              [state_ops.is_variable_initialized(v) for v in var_list]))
-      # Get a 1-D string tensor containing all the variable names.
-      variable_names_tensor = array_ops.constant([s.op.name for s in var_list])
-      # Return a 1-D tensor containing all the names of uninitialized variables.
-      return array_ops.boolean_mask(variable_names_tensor, variables_mask)
+    # Run all operations on CPU
+    if var_list:
+      init_vars = [state_ops.is_variable_initialized(v) for v in var_list]
+    with ops.device("/cpu:0"):
+      if not var_list:
+        # Return an empty tensor so we only need to check for returned tensor
+        # size being 0 as an indication of model ready.
+        return array_ops.constant([], dtype=dtypes.string)
+      else:
+        # Get a 1-D boolean tensor listing whether each variable is initialized.
+        variables_mask = math_ops.logical_not(array_ops.stack(init_vars))
+        # Get a 1-D string tensor containing all the variable names.
+        variable_names_tensor = array_ops.constant(
+            [s.op.name for s in var_list])
+        # Return a 1-D tensor containing all the names of
+        # uninitialized variables.
+        return array_ops.boolean_mask(variable_names_tensor, variables_mask)
 
 # pylint: disable=protected-access
-ops.register_tensor_conversion_function(Variable,
-                                        Variable._TensorConversionFunction)
 Variable._OverloadAllOperators()
 
 ops.register_tensor_conversion_function(

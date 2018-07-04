@@ -1,11 +1,18 @@
-# Packaging the TensorFlow C API and Java libraries into standalone archives
-# for use with language bindings and installations without Python.
-#
-# TODO(ashankar): Something similar for the C++ API (caveat: ABI compatibility)
+# Packaging for TensorFlow artifacts other than the Python API (pip whl).
+# This includes the C API, Java API, and protocol buffer files.
 
 package(default_visibility = ["//visibility:private"])
 
 load("@bazel_tools//tools/build_defs/pkg:pkg.bzl", "pkg_tar")
+load("//tensorflow:tensorflow.bzl", "tf_binary_additional_srcs")
+load("//third_party/mkl:build_defs.bzl", "if_mkl")
+
+genrule(
+    name = "libtensorflow_proto",
+    srcs = ["//tensorflow/core:protos_all_proto_srcs"],
+    outs = ["libtensorflow_proto.zip"],
+    cmd = "zip $@ $(SRCS)",
+)
 
 pkg_tar(
     name = "libtensorflow",
@@ -20,6 +27,7 @@ pkg_tar(
         ":cheaders",
         ":clib",
         ":clicenses",
+        ":eager_cheaders",
     ],
 )
 
@@ -36,12 +44,36 @@ pkg_tar(
     # are resolved, otherwise these rules break when built
     # with Python 3.
     tags = ["manual"],
+    deps = [":common_deps"],
+)
+
+# Shared objects that all TensorFlow libraries depend on.
+pkg_tar(
+    name = "common_deps",
+    files = tf_binary_additional_srcs(),
+    tags = ["manual"],
 )
 
 pkg_tar(
     name = "cheaders",
-    files = ["//tensorflow/c:headers"],
+    files = [
+        "//tensorflow/c:headers",
+    ],
     package_dir = "include/tensorflow/c",
+    # Mark as "manual" till
+    # https://github.com/bazelbuild/bazel/issues/2352
+    # and https://github.com/bazelbuild/bazel/issues/1580
+    # are resolved, otherwise these rules break when built
+    # with Python 3.
+    tags = ["manual"],
+)
+
+pkg_tar(
+    name = "eager_cheaders",
+    files = [
+        "//tensorflow/c/eager:headers",
+    ],
+    package_dir = "include/tensorflow/c/eager",
     # Mark as "manual" till
     # https://github.com/bazelbuild/bazel/issues/2352
     # and https://github.com/bazelbuild/bazel/issues/1580
@@ -60,6 +92,7 @@ pkg_tar(
     # are resolved, otherwise these rules break when built
     # with Python 3.
     tags = ["manual"],
+    deps = [":common_deps"],
 )
 
 pkg_tar(
@@ -79,24 +112,38 @@ genrule(
     srcs = [
         "//third_party/hadoop:LICENSE.txt",
         "//third_party/eigen3:LICENSE",
+        "//third_party/fft2d:LICENSE",
+        "@aws//:LICENSE",
         "@boringssl//:LICENSE",
+        "@com_github_googlecloudplatform_google_cloud_cpp//:LICENSE",
         "@com_googlesource_code_re2//:LICENSE",
+        "@cub_archive//:LICENSE.TXT",
         "@curl//:COPYING",
+        "@double_conversion//:LICENSE",
         "@eigen_archive//:COPYING.MPL2",
         "@farmhash_archive//:COPYING",
+        "@fft2d//:fft/readme.txt",
         "@gemmlowp//:LICENSE",
         "@gif_archive//:COPYING",
         "@grpc//:LICENSE",
+        "@grpc//third_party/address_sorting:LICENSE",
+        "@grpc//third_party/nanopb:LICENSE.txt",
         "@highwayhash//:LICENSE",
         "@jemalloc//:COPYING",
         "@jpeg//:LICENSE.md",
-        "@libxsmm_archive//:LICENSE",
+        "@libxsmm_archive//:LICENSE.md",
+        "@llvm//:LICENSE.TXT",
+        "@lmdb//:LICENSE",
         "@local_config_sycl//sycl:LICENSE.text",
-        "@nanopb_git//:LICENSE.txt",
+        "@nasm//:LICENSE",
+        "@nsync//:LICENSE",
         "@png_archive//:LICENSE",
-        "@protobuf//:LICENSE",
+        "@protobuf_archive//:LICENSE",
+        "@snappy//:COPYING",
         "@zlib_archive//:zlib.h",
-    ],
+    ] + if_mkl([
+        "//third_party/mkl:LICENSE",
+    ]),
     outs = ["include/tensorflow/c/LICENSE"],
     cmd = "$(location :concat_licenses.sh) $(SRCS) >$@",
     tools = [":concat_licenses.sh"],
@@ -107,24 +154,35 @@ genrule(
     srcs = [
         "//third_party/hadoop:LICENSE.txt",
         "//third_party/eigen3:LICENSE",
+        "//third_party/fft2d:LICENSE",
+        "@aws//:LICENSE",
         "@boringssl//:LICENSE",
+        "@com_github_googlecloudplatform_google_cloud_cpp//:LICENSE",
         "@com_googlesource_code_re2//:LICENSE",
+        "@cub_archive//:LICENSE.TXT",
         "@curl//:COPYING",
+        "@double_conversion//:LICENSE",
         "@eigen_archive//:COPYING.MPL2",
         "@farmhash_archive//:COPYING",
+        "@fft2d//:fft/readme.txt",
         "@gemmlowp//:LICENSE",
         "@gif_archive//:COPYING",
-        "@grpc//:LICENSE",
         "@highwayhash//:LICENSE",
         "@jemalloc//:COPYING",
         "@jpeg//:LICENSE.md",
-        "@libxsmm_archive//:LICENSE",
+        "@libxsmm_archive//:LICENSE.md",
+        "@llvm//:LICENSE.TXT",
+        "@lmdb//:LICENSE",
         "@local_config_sycl//sycl:LICENSE.text",
-        "@nanopb_git//:LICENSE.txt",
+        "@nasm//:LICENSE",
+        "@nsync//:LICENSE",
         "@png_archive//:LICENSE",
-        "@protobuf//:LICENSE",
+        "@protobuf_archive//:LICENSE",
+        "@snappy//:COPYING",
         "@zlib_archive//:zlib.h",
-    ],
+    ] + if_mkl([
+        "//third_party/mkl:LICENSE",
+    ]),
     outs = ["include/tensorflow/jni/LICENSE"],
     cmd = "$(location :concat_licenses.sh) $(SRCS) >$@",
     tools = [":concat_licenses.sh"],

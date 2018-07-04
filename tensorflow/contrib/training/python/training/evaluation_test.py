@@ -22,13 +22,11 @@ import glob
 import os
 import time
 
-
 import numpy as np
 
 from tensorflow.contrib.framework.python.ops import variables
 from tensorflow.contrib.layers.python.layers import layers
 from tensorflow.contrib.losses.python.losses import loss_ops
-from tensorflow.contrib.metrics.python.ops import metric_ops
 from tensorflow.contrib.training.python.training import evaluation
 from tensorflow.contrib.training.python.training import training
 from tensorflow.core.protobuf import config_pb2
@@ -39,6 +37,7 @@ from tensorflow.python.framework import ops
 from tensorflow.python.framework import random_seed
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import metrics
 from tensorflow.python.ops import state_ops
 from tensorflow.python.ops import variables as variables_lib
 from tensorflow.python.platform import gfile
@@ -106,6 +105,18 @@ class CheckpointIteratorTest(test.TestCase):
     for _ in evaluation.checkpoints_iterator(checkpoint_dir, timeout=0):
       num_found += 1
     self.assertEqual(num_found, 1)
+
+  def testTimeoutFn(self):
+    timeout_fn_calls = [0]
+    def timeout_fn():
+      timeout_fn_calls[0] += 1
+      return timeout_fn_calls[0] > 3
+
+    results = list(
+        evaluation.checkpoints_iterator(
+            '/non-existent-dir', timeout=0.1, timeout_fn=timeout_fn))
+    self.assertEqual([], results)
+    self.assertEqual(4, timeout_fn_calls[0])
 
 
 class WaitForNewCheckpointTest(test.TestCase):
@@ -185,7 +196,8 @@ class EvaluateOnceTest(test.TestCase):
     logits = logistic_classifier(inputs)
     predictions = math_ops.round(logits)
 
-    accuracy, update_op = metric_ops.streaming_accuracy(predictions, labels)
+    accuracy, update_op = metrics.accuracy(
+        predictions=predictions, labels=labels)
 
     checkpoint_path = evaluation.wait_for_new_checkpoint(checkpoint_dir)
 
@@ -193,7 +205,9 @@ class EvaluateOnceTest(test.TestCase):
         checkpoint_path=checkpoint_path,
         eval_ops=update_op,
         final_ops={'accuracy': accuracy},
-        hooks=[evaluation.StopAfterNEvalsHook(1),])
+        hooks=[
+            evaluation.StopAfterNEvalsHook(1),
+        ])
     self.assertTrue(final_ops_values['accuracy'] > .99)
 
   def testEvalOpAndFinalOp(self):
@@ -218,7 +232,9 @@ class EvaluateOnceTest(test.TestCase):
         checkpoint_path=checkpoint_path,
         eval_ops=eval_ops,
         final_ops={'value': final_ops},
-        hooks=[evaluation.StopAfterNEvalsHook(num_evals),])
+        hooks=[
+            evaluation.StopAfterNEvalsHook(num_evals),
+        ])
     self.assertEqual(final_ops_values['value'], num_evals + final_increment)
 
   def testOnlyFinalOp(self):
@@ -296,13 +312,16 @@ class EvaluateRepeatedlyTest(test.TestCase):
     logits = logistic_classifier(inputs)
     predictions = math_ops.round(logits)
 
-    accuracy, update_op = metric_ops.streaming_accuracy(predictions, labels)
+    accuracy, update_op = metrics.accuracy(
+        predictions=predictions, labels=labels)
 
     final_values = evaluation.evaluate_repeatedly(
         checkpoint_dir=checkpoint_dir,
         eval_ops=update_op,
         final_ops={'accuracy': accuracy},
-        hooks=[evaluation.StopAfterNEvalsHook(1),],
+        hooks=[
+            evaluation.StopAfterNEvalsHook(1),
+        ],
         max_number_of_evaluations=1)
     self.assertTrue(final_values['accuracy'] > .99)
 
@@ -312,7 +331,7 @@ class EvaluateRepeatedlyTest(test.TestCase):
     if not gfile.Exists(checkpoint_dir):
       gfile.MakeDirs(checkpoint_dir)
 
-    # We need a variable that that the saver will try to restore.
+    # We need a variable that the saver will try to restore.
     variables.get_or_create_global_step()
 
     # Run with placeholders. If we actually try to evaluate this, we'd fail
@@ -335,13 +354,50 @@ class EvaluateRepeatedlyTest(test.TestCase):
     # Then the timeout kicked in and stops the loop.
     self.assertLess(end - start, 7)
 
+  def testEvaluationLoopTimeoutWithTimeoutFn(self):
+    checkpoint_dir = os.path.join(self.get_temp_dir(),
+                                  'evaluation_loop_timeout_with_timeout_fn')
+
+    # Train a Model to completion:
+    self._train_model(checkpoint_dir, num_steps=300)
+
+    # Run
+    inputs = constant_op.constant(self._inputs, dtype=dtypes.float32)
+    labels = constant_op.constant(self._labels, dtype=dtypes.float32)
+    logits = logistic_classifier(inputs)
+    predictions = math_ops.round(logits)
+
+    accuracy, update_op = metrics.accuracy(
+        predictions=predictions, labels=labels)
+
+    timeout_fn_calls = [0]
+    def timeout_fn():
+      timeout_fn_calls[0] += 1
+      return timeout_fn_calls[0] > 3
+
+    final_values = evaluation.evaluate_repeatedly(
+        checkpoint_dir=checkpoint_dir,
+        eval_ops=update_op,
+        final_ops={'accuracy': accuracy},
+        hooks=[
+            evaluation.StopAfterNEvalsHook(1),
+        ],
+        eval_interval_secs=1,
+        max_number_of_evaluations=2,
+        timeout=0.1,
+        timeout_fn=timeout_fn)
+    # We should have evaluated once.
+    self.assertTrue(final_values['accuracy'] > .99)
+    # And called 4 times the timeout fn
+    self.assertEqual(4, timeout_fn_calls[0])
+
   def testEvaluateWithEvalFeedDict(self):
     # Create a checkpoint.
     checkpoint_dir = os.path.join(self.get_temp_dir(),
                                   'evaluate_with_eval_feed_dict')
     self._train_model(checkpoint_dir, num_steps=1)
 
-    # We need a variable that that the saver will try to restore.
+    # We need a variable that the saver will try to restore.
     variables.get_or_create_global_step()
 
     # Create a variable and an eval op that increments it with a placeholder.
@@ -357,14 +413,15 @@ class EvaluateRepeatedlyTest(test.TestCase):
         eval_ops=eval_ops,
         feed_dict={increment: 3},
         final_ops={'my_var': array_ops.identity(my_var)},
-        hooks=[evaluation.StopAfterNEvalsHook(num_evals),],
+        hooks=[
+            evaluation.StopAfterNEvalsHook(num_evals),
+        ],
         max_number_of_evaluations=1)
     self.assertEqual(final_values['my_var'], expected_value)
 
   def _create_names_to_metrics(self, predictions, labels):
-    accuracy0, update_op0 = metric_ops.streaming_accuracy(predictions, labels)
-    accuracy1, update_op1 = metric_ops.streaming_accuracy(predictions + 1,
-                                                          labels)
+    accuracy0, update_op0 = metrics.accuracy(labels, predictions)
+    accuracy1, update_op1 = metrics.accuracy(labels, predictions + 1)
 
     names_to_values = {'Accuracy': accuracy0, 'Another_accuracy': accuracy1}
     names_to_updates = {'Accuracy': update_op0, 'Another_accuracy': update_op1}
@@ -413,7 +470,9 @@ class EvaluateRepeatedlyTest(test.TestCase):
 
     evaluation.evaluate_repeatedly(
         checkpoint_dir=checkpoint_dir,
-        hooks=[evaluation.SummaryAtEndHook(log_dir=logdir),],
+        hooks=[
+            evaluation.SummaryAtEndHook(log_dir=logdir),
+        ],
         max_number_of_evaluations=1)
 
     self._verify_summaries(logdir, names_to_values)

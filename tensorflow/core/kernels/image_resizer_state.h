@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-// This is a helper struct to package up the input and ouput
+// This is a helper struct to package up the input and output
 // parameters of an image resizer (the height, widths, etc.).  To
 // reduce code duplication and ensure consistency across the different
 // resizers, it performs the input validation.
@@ -109,8 +109,9 @@ struct ImageResizerState {
     ValidateAndCalculateOutputSize(context, input);
     if (!context->status().ok()) return;
     OP_REQUIRES_OK(context, context->allocate_output(
-                                0, TensorShape({input.dim_size(0), out_height,
-                                                out_width, input.dim_size(3)}),
+                                0,
+                                TensorShape({input.dim_size(0), out_height,
+                                             out_width, input.dim_size(3)}),
                                 &output));
   }
 
@@ -122,7 +123,7 @@ struct ImageResizerState {
   int64 channels;
   float height_scale;
   float width_scale;
-  Tensor* output;
+  Tensor* output = nullptr;
 
  private:
   bool align_corners_;
@@ -168,8 +169,9 @@ struct ImageResizerGradientState {
         CalculateResizeScale(original_width, resized_width, align_corners_);
     output = nullptr;
     OP_REQUIRES_OK(context, context->allocate_output(
-                                0, TensorShape({batch_size, original_height,
-                                                original_width, channels}),
+                                0,
+                                TensorShape({batch_size, original_height,
+                                             original_width, channels}),
                                 &output));
   }
 

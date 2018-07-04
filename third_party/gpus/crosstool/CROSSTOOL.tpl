@@ -26,137 +26,279 @@ default_toolchain {
 toolchain {
   abi_version: "local"
   abi_libc_version: "local"
-  builtin_sysroot: ""
   compiler: "compiler"
   host_system_name: "local"
   needsPic: true
-  supports_gold_linker: false
-  supports_incremental_linker: false
-  supports_fission: false
-  supports_interface_shared_objects: false
-  supports_normalizing_ar: false
-  supports_start_end_lib: false
-  supports_thin_archives: false
   target_libc: "local"
   target_cpu: "local"
   target_system_name: "local"
   toolchain_identifier: "local_linux"
 
+  feature {
+    name: "c++11"
+    flag_set {
+      action: "c++-compile"
+      flag_group {
+        flag: "-std=c++11"
+      }
+    }
+  }
+
+  feature {
+    name: "stdlib"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        flag: "-lstdc++"
+      }
+    }
+  }
+
+  feature {
+    name: "determinism"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # Make C++ compilation deterministic. Use linkstamping instead of these
+        # compiler symbols.
+        flag: "-Wno-builtin-macro-redefined"
+        flag: "-D__DATE__=\"redacted\""
+        flag: "-D__TIMESTAMP__=\"redacted\""
+        flag: "-D__TIME__=\"redacted\""
+      }
+    }
+  }
+
+  feature {
+    name: "alwayslink"
+    flag_set {
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "c++-link-executable"
+      flag_group {
+        flag: "-Wl,-no-as-needed"
+      }
+    }
+  }
+
+  # This feature will be enabled for builds that support pic by bazel.
+  feature {
+    name: "pic"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        expand_if_all_available: "pic"
+        flag: "-fPIC"
+      }
+      flag_group {
+        expand_if_none_available: "pic"
+        flag: "-fPIE"
+      }
+    }
+  }
+
+  # Security hardening on by default.
+  feature {
+    name: "hardening"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # Conservative choice; -D_FORTIFY_SOURCE=2 may be unsafe in some cases.
+        # We need to undef it before redefining it as some distributions now
+        # have it enabled by default.
+        flag: "-U_FORTIFY_SOURCE"
+        flag: "-D_FORTIFY_SOURCE=1"
+        flag: "-fstack-protector"
+      }
+    }
+    flag_set {
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        flag: "-Wl,-z,relro,-z,now"
+      }
+    }
+    flag_set {
+      action: "c++-link-executable"
+      flag_group {
+        flag: "-pie"
+        flag: "-Wl,-z,relro,-z,now"
+      }
+    }
+  }
+
+  feature {
+    name: "warnings"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # All warnings are enabled. Maybe enable -Werror as well?
+        flag: "-Wall"
+        %{host_compiler_warnings}
+      }
+    }
+  }
+
+  # Keep stack frames for debugging, even in opt mode.
+  feature {
+    name: "frame-pointer"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        flag: "-fno-omit-frame-pointer"
+      }
+    }
+  }
+
+  feature {
+    name: "build-id"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        # Stamp the binary with a unique identifier.
+        flag: "-Wl,--build-id=md5"
+        flag: "-Wl,--hash-style=gnu"
+      }
+    }
+  }
+
+  feature {
+    name: "no-canonical-prefixes"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        flag:"-no-canonical-prefixes"
+      }
+    }
+  }
+
+  feature {
+    name: "disable-assertions"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        flag: "-DNDEBUG"
+      }
+    }
+  }
+
+  feature {
+    name: "linker-bin-path"
+
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        flag: "-B/usr/bin/"
+      }
+    }
+  }
+
+  feature {
+    name: "common"
+    implies: "stdlib"
+    implies: "c++11"
+    implies: "determinism"
+    implies: "alwayslink"
+    implies: "hardening"
+    implies: "warnings"
+    implies: "frame-pointer"
+    implies: "build-id"
+    implies: "no-canonical-prefixes"
+    implies: "linker-bin-path"
+  }
+
+  feature {
+    name: "opt"
+    implies: "common"
+    implies: "disable-assertions"
+
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # No debug symbols.
+        # Maybe we should enable https://gcc.gnu.org/wiki/DebugFission for opt
+        # or even generally? However, that can't happen here, as it requires
+        # special handling in Bazel.
+        flag: "-g0"
+
+        # Conservative choice for -O
+        # -O3 can increase binary size and even slow down the resulting binaries.
+        # Profile first and / or use FDO if you need better performance than this.
+        flag: "-O2"
+
+        # Removal of unused code and data at link time (can this increase binary size in some cases?).
+        flag: "-ffunction-sections"
+        flag: "-fdata-sections"
+      }
+    }
+    flag_set {
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "c++-link-executable"
+      flag_group {
+        flag: "-Wl,--gc-sections"
+      }
+    }
+  }
+
+  feature {
+    name: "fastbuild"
+    implies: "common"
+  }
+
+  feature {
+    name: "dbg"
+    implies: "common"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        flag: "-g"
+      }
+    }
+  }
+
+  # Set clang as a C/C++ compiler.
+  tool_path { name: "gcc" path: "%{host_compiler_path}" }
+
+  # Use the default system toolchain for everything else.
   tool_path { name: "ar" path: "/usr/bin/ar" }
   tool_path { name: "compat-ld" path: "/usr/bin/ld" }
   tool_path { name: "cpp" path: "/usr/bin/cpp" }
   tool_path { name: "dwp" path: "/usr/bin/dwp" }
-  # As part of the TensorFlow release, we place some cuda-related compilation
-  # files in @local_config_cuda//crosstool/clang/bin, and this relative
-  # path, combined with the rest of our Bazel configuration causes our
-  # compilation to use those files.
-  tool_path { name: "gcc" path: "clang/bin/crosstool_wrapper_driver_is_not_gcc" }
-  # Use "-std=c++11" for nvcc. For consistency, force both the host compiler
-  # and the device compiler to use "-std=c++11".
-  cxx_flag: "-std=c++11"
-  linker_flag: "-Wl,-no-as-needed"
-  linker_flag: "-lstdc++"
-  linker_flag: "-B/usr/bin/"
-
-%{gcc_host_compiler_includes}
   tool_path { name: "gcov" path: "/usr/bin/gcov" }
-
-  # C(++) compiles invoke the compiler (as that is the one knowing where
-  # to find libraries), but we provide LD so other rules can invoke the linker.
   tool_path { name: "ld" path: "/usr/bin/ld" }
-
   tool_path { name: "nm" path: "/usr/bin/nm" }
   tool_path { name: "objcopy" path: "/usr/bin/objcopy" }
-  objcopy_embed_flag: "-I"
-  objcopy_embed_flag: "binary"
   tool_path { name: "objdump" path: "/usr/bin/objdump" }
   tool_path { name: "strip" path: "/usr/bin/strip" }
 
-  # Anticipated future default.
-  unfiltered_cxx_flag: "-no-canonical-prefixes"
-
-  # Make C++ compilation deterministic. Use linkstamping instead of these
-  # compiler symbols.
-  unfiltered_cxx_flag: "-Wno-builtin-macro-redefined"
-  unfiltered_cxx_flag: "-D__DATE__=\"redacted\""
-  unfiltered_cxx_flag: "-D__TIMESTAMP__=\"redacted\""
-  unfiltered_cxx_flag: "-D__TIME__=\"redacted\""
-
-  # Security hardening on by default.
-  # Conservative choice; -D_FORTIFY_SOURCE=2 may be unsafe in some cases.
-  # We need to undef it before redefining it as some distributions now have
-  # it enabled by default.
-  compiler_flag: "-U_FORTIFY_SOURCE"
-  compiler_flag: "-D_FORTIFY_SOURCE=1"
-  compiler_flag: "-fstack-protector"
-  compiler_flag: "-fPIE"
-  linker_flag: "-pie"
-  linker_flag: "-Wl,-z,relro,-z,now"
-
-  # Enable coloring even if there's no attached terminal. Bazel removes the
-  # escape sequences if --nocolor is specified. This isn't supported by gcc
-  # on Ubuntu 14.04.
-  # compiler_flag: "-fcolor-diagnostics"
-
-  # All warnings are enabled. Maybe enable -Werror as well?
-  compiler_flag: "-Wall"
-  # Enable a few more warnings that aren't part of -Wall.
-  compiler_flag: "-Wunused-but-set-parameter"
-  # But disable some that are problematic.
-  compiler_flag: "-Wno-free-nonheap-object" # has false positives
-
-  # Keep stack frames for debugging, even in opt mode.
-  compiler_flag: "-fno-omit-frame-pointer"
-
-  # Anticipated future default.
-  linker_flag: "-no-canonical-prefixes"
-  unfiltered_cxx_flag: "-fno-canonical-system-headers"
-  # Have gcc return the exit code from ld.
-  linker_flag: "-pass-exit-codes"
-  # Stamp the binary with a unique identifier.
-  linker_flag: "-Wl,--build-id=md5"
-  linker_flag: "-Wl,--hash-style=gnu"
-  # Gold linker only? Can we enable this by default?
-  # linker_flag: "-Wl,--warn-execstack"
-  # linker_flag: "-Wl,--detect-odr-violations"
-
-  # Include directory for cuda headers.
-  cxx_builtin_include_directory: "%{cuda_include_path}"
-
-  compilation_mode_flags {
-    mode: DBG
-    # Enable debug symbols.
-    compiler_flag: "-g"
-  }
-  compilation_mode_flags {
-    mode: OPT
-
-    # No debug symbols.
-    # Maybe we should enable https://gcc.gnu.org/wiki/DebugFission for opt or
-    # even generally? However, that can't happen here, as it requires special
-    # handling in Bazel.
-    compiler_flag: "-g0"
-
-    # Conservative choice for -O
-    # -O3 can increase binary size and even slow down the resulting binaries.
-    # Profile first and / or use FDO if you need better performance than this.
-    compiler_flag: "-O2"
-
-    # Disable assertions
-    compiler_flag: "-DNDEBUG"
-
-    # Removal of unused code and data at link time (can this increase binary size in some cases?).
-    compiler_flag: "-ffunction-sections"
-    compiler_flag: "-fdata-sections"
-    linker_flag: "-Wl,--gc-sections"
-  }
+  # Enabled dynamic linking.
   linking_mode_flags { mode: DYNAMIC }
+
+%{host_compiler_includes}
 }
 
 toolchain {
   abi_version: "local"
   abi_libc_version: "local"
-  builtin_sysroot: ""
   compiler: "compiler"
   host_system_name: "local"
   needsPic: true
@@ -164,86 +306,234 @@ toolchain {
   target_cpu: "darwin"
   target_system_name: "local"
   toolchain_identifier: "local_darwin"
+  feature {
+    name: "c++11"
+    flag_set {
+      action: "c++-compile"
+      flag_group {
+        flag: "-std=c++11"
+      }
+    }
+  }
 
+  feature {
+    name: "stdlib"
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        flag: "-lc++"
+      }
+    }
+  }
+
+  feature {
+    name: "determinism"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # Make C++ compilation deterministic. Use linkstamping instead of these
+        # compiler symbols.
+        flag: "-Wno-builtin-macro-redefined"
+        flag: "-D__DATE__=\"redacted\""
+        flag: "-D__TIMESTAMP__=\"redacted\""
+        flag: "-D__TIME__=\"redacted\""
+      }
+    }
+  }
+
+  # This feature will be enabled for builds that support pic by bazel.
+  feature {
+    name: "pic"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        expand_if_all_available: "pic"
+        flag: "-fPIC"
+      }
+      flag_group {
+        expand_if_none_available: "pic"
+        flag: "-fPIE"
+      }
+    }
+  }
+
+  # Security hardening on by default.
+  feature {
+    name: "hardening"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # Conservative choice; -D_FORTIFY_SOURCE=2 may be unsafe in some cases.
+        # We need to undef it before redefining it as some distributions now
+        # have it enabled by default.
+        flag: "-U_FORTIFY_SOURCE"
+        flag: "-D_FORTIFY_SOURCE=1"
+        flag: "-fstack-protector"
+      }
+    }
+    flag_set {
+      action: "c++-link-executable"
+      flag_group {
+        flag: "-pie"
+      }
+    }
+  }
+
+  feature {
+    name: "warnings"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # All warnings are enabled. Maybe enable -Werror as well?
+        flag: "-Wall"
+        %{host_compiler_warnings}
+      }
+    }
+  }
+
+  # Keep stack frames for debugging, even in opt mode.
+  feature {
+    name: "frame-pointer"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        flag: "-fno-omit-frame-pointer"
+      }
+    }
+  }
+
+  feature {
+    name: "no-canonical-prefixes"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        flag:"-no-canonical-prefixes"
+      }
+    }
+  }
+
+  feature {
+    name: "disable-assertions"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        flag: "-DNDEBUG"
+      }
+    }
+  }
+
+  feature {
+    name: "linker-bin-path"
+
+    flag_set {
+      action: "c++-link-executable"
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      flag_group {
+        flag: "-B/usr/bin/"
+      }
+    }
+  }
+
+  feature {
+    name: "undefined-dynamic"
+    flag_set {
+      action: "c++-link-dynamic-library"
+      action: "c++-link-nodeps-dynamic-library"
+      action: "c++-link-executable"
+      flag_group {
+        flag: "-undefined"
+        flag: "dynamic_lookup"
+      }
+    }
+  }
+
+  feature {
+    name: "common"
+    implies: "stdlib"
+    implies: "c++11"
+    implies: "determinism"
+    implies: "hardening"
+    implies: "warnings"
+    implies: "frame-pointer"
+    implies: "no-canonical-prefixes"
+    implies: "linker-bin-path"
+    implies: "undefined-dynamic"
+  }
+
+  feature {
+    name: "opt"
+    implies: "common"
+    implies: "disable-assertions"
+
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        # No debug symbols.
+        # Maybe we should enable https://gcc.gnu.org/wiki/DebugFission for opt
+        # or even generally? However, that can't happen here, as it requires
+        # special handling in Bazel.
+        flag: "-g0"
+
+        # Conservative choice for -O
+        # -O3 can increase binary size and even slow down the resulting binaries.
+        # Profile first and / or use FDO if you need better performance than this.
+        flag: "-O2"
+
+        # Removal of unused code and data at link time (can this increase binary size in some cases?).
+        flag: "-ffunction-sections"
+        flag: "-fdata-sections"
+      }
+    }
+  }
+
+  feature {
+    name: "fastbuild"
+    implies: "common"
+  }
+
+  feature {
+    name: "dbg"
+    implies: "common"
+    flag_set {
+      action: "c-compile"
+      action: "c++-compile"
+      flag_group {
+        flag: "-g"
+      }
+    }
+  }
+
+  # Set clang as a C/C++ compiler.
+  tool_path { name: "gcc" path: "%{host_compiler_path}" }
+
+  # Use the default system toolchain for everything else.
   tool_path { name: "ar" path: "/usr/bin/libtool" }
   tool_path { name: "compat-ld" path: "/usr/bin/ld" }
   tool_path { name: "cpp" path: "/usr/bin/cpp" }
   tool_path { name: "dwp" path: "/usr/bin/dwp" }
-  tool_path { name: "gcc" path: "clang/bin/crosstool_wrapper_driver_is_not_gcc" }
-  cxx_flag: "-std=c++11"
-  ar_flag: "-static"
-  ar_flag: "-s"
-  ar_flag: "-o"
-  linker_flag: "-lc++"
-  linker_flag: "-undefined"
-  linker_flag: "dynamic_lookup"
-  # TODO(ulfjack): This is wrong on so many levels. Figure out a way to auto-detect the proper
-  # setting from the local compiler, and also how to make incremental builds correct.
-  cxx_builtin_include_directory: "/"
   tool_path { name: "gcov" path: "/usr/bin/gcov" }
   tool_path { name: "ld" path: "/usr/bin/ld" }
   tool_path { name: "nm" path: "/usr/bin/nm" }
   tool_path { name: "objcopy" path: "/usr/bin/objcopy" }
-  objcopy_embed_flag: "-I"
-  objcopy_embed_flag: "binary"
   tool_path { name: "objdump" path: "/usr/bin/objdump" }
   tool_path { name: "strip" path: "/usr/bin/strip" }
 
-  # Anticipated future default.
-  unfiltered_cxx_flag: "-no-canonical-prefixes"
-  # Make C++ compilation deterministic. Use linkstamping instead of these
-  # compiler symbols.
-  unfiltered_cxx_flag: "-Wno-builtin-macro-redefined"
-  unfiltered_cxx_flag: "-D__DATE__=\"redacted\""
-  unfiltered_cxx_flag: "-D__TIMESTAMP__=\"redacted\""
-  unfiltered_cxx_flag: "-D__TIME__=\"redacted\""
+  # Enabled dynamic linking.
+  linking_mode_flags { mode: DYNAMIC }
 
-  # Security hardening on by default.
-  # Conservative choice; -D_FORTIFY_SOURCE=2 may be unsafe in some cases.
-  compiler_flag: "-D_FORTIFY_SOURCE=1"
-  compiler_flag: "-fstack-protector"
-
-  # Enable coloring even if there's no attached terminal. Bazel removes the
-  # escape sequences if --nocolor is specified.
-  compiler_flag: "-fcolor-diagnostics"
-
-  # All warnings are enabled. Maybe enable -Werror as well?
-  compiler_flag: "-Wall"
-  # Enable a few more warnings that aren't part of -Wall.
-  compiler_flag: "-Wthread-safety"
-  compiler_flag: "-Wself-assign"
-
-  # Keep stack frames for debugging, even in opt mode.
-  compiler_flag: "-fno-omit-frame-pointer"
-
-  # Anticipated future default.
-  linker_flag: "-no-canonical-prefixes"
-
-  # Include directory for cuda headers.
-  cxx_builtin_include_directory: "%{cuda_include_path}"
-
-  compilation_mode_flags {
-    mode: DBG
-    # Enable debug symbols.
-    compiler_flag: "-g"
-  }
-  compilation_mode_flags {
-    mode: OPT
-    # No debug symbols.
-    # Maybe we should enable https://gcc.gnu.org/wiki/DebugFission for opt or even generally?
-    # However, that can't happen here, as it requires special handling in Bazel.
-    compiler_flag: "-g0"
-
-    # Conservative choice for -O
-    # -O3 can increase binary size and even slow down the resulting binaries.
-    # Profile first and / or use FDO if you need better performance than this.
-    compiler_flag: "-O2"
-
-    # Disable assertions
-    compiler_flag: "-DNDEBUG"
-
-    # Removal of unused code and data at link time (can this increase binary size in some cases?).
-    compiler_flag: "-ffunction-sections"
-    compiler_flag: "-fdata-sections"
-  }
+%{host_compiler_includes}
 }

@@ -42,11 +42,58 @@ source "tensorflow/tools/ci_build/windows/bazel/common_env.sh" \
 source "tensorflow/tools/ci_build/windows/bazel/bazel_test_lib.sh" \
   || { echo "Failed to source bazel_test_lib.sh" >&2; exit 1; }
 
-clean_output_base
+# Recreate an empty bazelrc file under source root
+export TMP_BAZELRC=.tmp.bazelrc
+rm -f "${TMP_BAZELRC}"
+touch "${TMP_BAZELRC}"
+
+function cleanup {
+  # Remove all options in .tmp.bazelrc
+  echo "" > "${TMP_BAZELRC}"
+}
+trap cleanup EXIT
+
+skip_test=0
+release_build=0
+
+for ARG in "$@"; do
+  if [[ "$ARG" == --skip_test ]]; then
+    skip_test=1
+  elif [[ "$ARG" == --enable_remote_cache ]]; then
+    set_remote_cache_options
+  elif [[ "$ARG" == --release_build ]]; then
+    release_build=1
+  fi
+done
+
+if [[ "$release_build" != 1 ]]; then
+  # --define=override_eigen_strong_inline=true speeds up the compiling of conv_grad_ops_3d.cc and conv_ops_3d.cc
+  # by 20 minutes. See https://github.com/tensorflow/tensorflow/issues/10521
+  # Because this hurts the performance of TF, we don't enable it in release build.
+  echo "build --define=override_eigen_strong_inline=true" >> "${TMP_BAZELRC}"
+fi
+
+# The host and target platforms are the same in Windows build. So we don't have
+# to distinct them. This helps avoid building the same targets twice.
+echo "build --distinct_host_configuration=false" >> "${TMP_BAZELRC}"
+
+# Enable short object file path to avoid long path issue on Windows.
+echo "startup --output_user_root=${TMPDIR}" >> "${TMP_BAZELRC}"
+
+# Disable nvcc warnings to reduce log file size.
+echo "build --copt=-nvcc_options=disable-warnings" >> "${TMP_BAZELRC}"
+
+if ! grep -q "import %workspace%/${TMP_BAZELRC}" .bazelrc; then
+  echo "import %workspace%/${TMP_BAZELRC}" >> .bazelrc
+fi
 
 run_configure_for_gpu_build
 
-bazel build -c opt --config=win-cuda $BUILD_OPTS tensorflow/tools/pip_package:build_pip_package || exit $?
+bazel build --announce_rc --config=opt tensorflow/tools/pip_package:build_pip_package || exit $?
+
+if [[ "$skip_test" == 1 ]]; then
+  exit 0
+fi
 
 # Create a python test directory to avoid package name conflict
 PY_TEST_DIR="py_test_dir"
@@ -58,13 +105,14 @@ create_python_test_dir "${PY_TEST_DIR}"
 PIP_NAME=$(ls ${PY_TEST_DIR}/tensorflow-*.whl)
 reinstall_tensorflow_pip ${PIP_NAME}
 
-failing_gpu_py_tests=$(get_failing_gpu_py_tests ${PY_TEST_DIR})
-
-passing_tests=$(bazel query "kind(py_test,  //${PY_TEST_DIR}/tensorflow/python/...) - (${failing_gpu_py_tests})" |
-  # We need to strip \r so that the result could be store into a variable under MSYS
-  tr '\r' ' ')
-
 # Define no_tensorflow_py_deps=true so that every py_test has no deps anymore,
 # which will result testing system installed tensorflow
-# GPU tests are very flaky when running concurently, so set local_test_jobs=5
-bazel test -c opt --config=win-cuda $BUILD_OPTS -k $passing_tests --define=no_tensorflow_py_deps=true --test_output=errors --local_test_jobs=5
+# GPU tests are very flaky when running concurrently, so set local_test_jobs=1
+bazel test --announce_rc --config=opt -k --test_output=errors \
+  --define=no_tensorflow_py_deps=true --test_lang_filters=py \
+  --test_tag_filters=-no_pip,-no_windows,-no_windows_gpu,-no_gpu,-no_pip_gpu,-no_oss \
+  --build_tag_filters=-no_pip,-no_windows,-no_windows_gpu,-no_gpu,-no_pip_gpu,-no_oss --build_tests_only \
+  --local_test_jobs=1 --test_timeout="300,450,1200,3600" \
+  --flaky_test_attempts=3 \
+  //${PY_TEST_DIR}/tensorflow/python/... \
+  //${PY_TEST_DIR}/tensorflow/contrib/...

@@ -18,13 +18,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import sys
-
-# TODO: #6568 Remove this hack that makes dlopen() not crash.
-if hasattr(sys, 'getdlopenflags') and hasattr(sys, 'setdlopenflags'):
-  import ctypes
-  sys.setdlopenflags(sys.getdlopenflags() | ctypes.RTLD_GLOBAL)
-
 import numpy
 
 from tensorflow.contrib import layers
@@ -207,7 +200,7 @@ class SparseCrossOpTest(test.TestCase):
       self._assert_sparse_tensor_equals(expected_out, sess.run(op))
 
   def test_large_batch(self):
-    """Tests with large batch size to force multithreding.
+    """Tests with large batch size to force multithreading.
     """
     batch_size = 5000
     col1 = []

@@ -18,10 +18,12 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from tensorflow.core.protobuf import cluster_pb2
 from tensorflow.core.protobuf import tensorflow_server_pb2
 from tensorflow.python import pywrap_tensorflow
 from tensorflow.python.framework import errors
 from tensorflow.python.util import compat
+from tensorflow.python.util.tf_export import tf_export
 
 
 def _make_server_def(server_or_cluster_def, job_name, task_index, protocol,
@@ -91,6 +93,7 @@ def _make_server_def(server_or_cluster_def, job_name, task_index, protocol,
   return server_def
 
 
+@tf_export("train.Server")
 class Server(object):
   """An in-process TensorFlow server, for use in distributed training.
 
@@ -220,6 +223,7 @@ class Server(object):
                   start=start)
 
 
+@tf_export("train.ClusterSpec")
 class ClusterSpec(object):
   """Represents a cluster as a set of "tasks", organized into "jobs".
 
@@ -276,14 +280,14 @@ class ClusterSpec(object):
                           "from integers to strings." % job_name)
         self._cluster_spec[job_name] = job_tasks
       self._make_cluster_def()
-    elif isinstance(cluster, tensorflow_server_pb2.ClusterDef):
+    elif isinstance(cluster, cluster_pb2.ClusterDef):
       self._cluster_def = cluster
       self._cluster_spec = {}
       for job_def in self._cluster_def.job:
         self._cluster_spec[job_def.name] = {
             i: t for i, t in job_def.tasks.items()}
     elif isinstance(cluster, ClusterSpec):
-      self._cluster_def = tensorflow_server_pb2.ClusterDef()
+      self._cluster_def = cluster_pb2.ClusterDef()
       self._cluster_def.MergeFrom(cluster.as_cluster_def())
       self._cluster_spec = {}
       for job_def in self._cluster_def.job:
@@ -305,6 +309,12 @@ class ClusterSpec(object):
 
   def __ne__(self, other):
     return self._cluster_spec != other
+
+  def __str__(self):
+    key_values = self.as_dict()
+    string_items = [
+        repr(k) + ": " + repr(key_values[k]) for k in sorted(key_values)]
+    return "ClusterSpec({" + ", ".join(string_items) + "})"
 
   def as_dict(self):
     """Returns a dictionary from job names to their tasks.
@@ -440,7 +450,7 @@ class ClusterSpec(object):
       TypeError: If `cluster_spec` is not a dictionary mapping strings to lists
         of strings.
     """
-    self._cluster_def = tensorflow_server_pb2.ClusterDef()
+    self._cluster_def = cluster_pb2.ClusterDef()
 
     # NOTE(mrry): Sort by job_name to produce deterministic protobufs.
     for job_name, tasks in sorted(self._cluster_spec.items()):

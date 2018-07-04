@@ -26,7 +26,7 @@
 #                  directory as this script will be used.
 #
 # COMMAND: Command to be executed in the docker container, e.g.,
-#          tensorflow/tools/ci_build/builds/pip.sh gpu
+#          tensorflow/tools/ci_build/builds/pip.sh gpu -c opt --config=cuda
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/builds/builds_common.sh"
@@ -73,18 +73,13 @@ CI_TENSORFLOW_SUBMODULE_PATH="${CI_TENSORFLOW_SUBMODULE_PATH:-.}"
 CI_COMMAND_PREFIX=("${CI_COMMAND_PREFIX[@]:-${CI_TENSORFLOW_SUBMODULE_PATH}/tensorflow/tools/ci_build/builds/with_the_same_user "\
 "${CI_TENSORFLOW_SUBMODULE_PATH}/tensorflow/tools/ci_build/builds/configured ${CONTAINER_TYPE}}")
 
-if [[ ! -z "${TF_BUILD_DISABLE_GCP}" ]] &&
-   [[ "${TF_BUILD_DISABLE_GCP}" != "0" ]]; then
-  CI_COMMAND_PREFIX+=("--disable-gcp")
-fi
-
 # cmake (CPU) builds do not require configuration.
 if [[ "${CONTAINER_TYPE}" == "cmake" ]]; then
-  CI_COMMAND_PREFIX=""
+  CI_COMMAND_PREFIX=("")
 fi
 
 # Use nvidia-docker if the container is GPU.
-if [[ "${CONTAINER_TYPE}" == "gpu" ]]; then
+if [[ "${CONTAINER_TYPE}" == gpu* ]]; then
   DOCKER_BINARY="nvidia-docker"
 else
   DOCKER_BINARY="docker"
@@ -104,7 +99,7 @@ BUILD_TAG="${BUILD_TAG:-tf_ci}"
 
 # Add extra params for cuda devices and libraries for GPU container.
 # And clear them if we are not building for GPU.
-if [ "${CONTAINER_TYPE}" != "gpu" ]; then
+if [[ "${CONTAINER_TYPE}" != gpu* ]]; then
   GPU_EXTRA_PARAMS=""
 fi
 
@@ -120,9 +115,9 @@ DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | tr '[:upper:]' '[:lower:]')
 
 # Print arguments.
 echo "WORKSPACE: ${WORKSPACE}"
-echo "CI_DOCKER_EXTRA_PARAMS: ${CI_DOCKER_EXTRA_PARAMS[@]}"
-echo "COMMAND: ${COMMAND[@]}"
-echo "CI_COMMAND_PREFIX: ${CI_COMMAND_PREFIX[@]}"
+echo "CI_DOCKER_EXTRA_PARAMS: ${CI_DOCKER_EXTRA_PARAMS[*]}"
+echo "COMMAND: ${COMMAND[*]}"
+echo "CI_COMMAND_PREFIX: ${CI_COMMAND_PREFIX[*]}"
 echo "CONTAINER_TYPE: ${CONTAINER_TYPE}"
 echo "BUILD_TAG: ${BUILD_TAG}"
 echo "  (docker container name will be ${DOCKER_IMG_NAME})"
@@ -139,8 +134,14 @@ if [[ $? != "0" ]]; then
   die "ERROR: docker build failed. Dockerfile is at ${DOCKERFILE_PATH}"
 fi
 
+# If caller wants the with_the_same_user script to allow bad usernames, 
+# pass the var to the docker environment
+if [ -n "${CI_BUILD_USER_FORCE_BADNAME}" ]; then
+        CI_BUILD_USER_FORCE_BADNAME_ENV="-e CI_BUILD_USER_FORCE_BADNAME=yes"
+fi
+
 # Run the command inside the container.
-echo "Running '${COMMAND[@]}' inside ${DOCKER_IMG_NAME}..."
+echo "Running '${COMMAND[*]}' inside ${DOCKER_IMG_NAME}..."
 mkdir -p ${WORKSPACE}/bazel-ci_build-cache
 # By default we cleanup - remove the container once it finish running (--rm)
 # and share the PID namespace (--pid=host) so the process inside does not have
@@ -153,6 +154,7 @@ ${DOCKER_BINARY} run --rm --pid=host \
     -e "CI_BUILD_GROUP=$(id -g -n)" \
     -e "CI_BUILD_GID=$(id -g)" \
     -e "CI_TENSORFLOW_SUBMODULE_PATH=${CI_TENSORFLOW_SUBMODULE_PATH}" \
+    ${CI_BUILD_USER_FORCE_BADNAME_ENV} \
     -v ${WORKSPACE}:/workspace \
     -w /workspace \
     ${GPU_EXTRA_PARAMS} \

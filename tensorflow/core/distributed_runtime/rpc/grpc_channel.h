@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef THIRD_PARTY_TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_GRPC_CHANNEL_H_
-#define THIRD_PARTY_TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_GRPC_CHANNEL_H_
+#ifndef TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_GRPC_CHANNEL_H_
+#define TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_GRPC_CHANNEL_H_
 
 #include <map>
 #include <memory>
@@ -22,7 +22,7 @@ limitations under the License.
 #include <string>
 #include <vector>
 
-#include "grpc++/grpc++.h"
+#include "grpcpp/grpcpp.h"
 
 #include "tensorflow/core/distributed_runtime/rpc/grpc_util.h"
 
@@ -84,8 +84,13 @@ GrpcChannelCache* NewGrpcChannelCache(const GrpcChannelSpec& channel_spec,
 
 // Below here are internal-only functions.
 
-SharedGrpcChannelPtr NewHostPortGrpcChannel(const string& target);
+ChannelCreationFunction ConvertToChannelCreationFunction(
+    const std::function<Status(string, SharedGrpcChannelPtr*)>&
+        new_channel_func_ptr);
+
+Status NewHostPortGrpcChannel(const string& target,
+                              SharedGrpcChannelPtr* channel_pointer);
 
 }  // namespace tensorflow
 
-#endif  // THIRD_PARTY_TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_GRPC_CHANNEL_H_
+#endif  // TENSORFLOW_CORE_DISTRIBUTED_RUNTIME_RPC_GRPC_CHANNEL_H_

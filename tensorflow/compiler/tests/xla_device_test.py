@@ -1,4 +1,4 @@
-# Copyright 2017 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2018 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,61 +20,38 @@ from __future__ import print_function
 
 import numpy as np
 
-from tensorflow.python.client import session as session_lib
-from tensorflow.python.framework import constant_op
-from tensorflow.python.framework import dtypes
+from tensorflow.compiler.tests import xla_test
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
-from tensorflow.python.ops import control_flow_ops
-from tensorflow.python.ops import math_ops
+from tensorflow.python.ops import gen_control_flow_ops
 from tensorflow.python.platform import test
 
 
-class XlaDeviceTest(test.TestCase):
+class XlaDeviceTest(xla_test.XLATestCase):
 
   def testCopies(self):
-    """Tests that copies between GPU and XLA devices work."""
-    if not test.is_gpu_available():
-      return
+    """Tests that copies onto and off XLA devices work."""
+    shapes = [[0], [1], [1, 0], [1024, 0], [1024, 1], [3, 777], [777, 3],
+              [16384, 1], [1, 16384], [1, 20000, 1, 1]]
+    for dtype in self.numeric_types:
+      for shape in shapes:
+        with self.test_session() as sess:
+          with ops.device("CPU"):
+            x = array_ops.placeholder(dtype, shape)
+          with self.test_scope():
+            y = x + x
+          with ops.device("CPU"):
+            z = array_ops.identity(y)
 
-    with session_lib.Session() as sess:
-      x = array_ops.placeholder(dtypes.float32, [2])
-      with ops.device("GPU"):
-        y = x * 2
-      with ops.device("device:XLA_CPU:0"):
-        z = y * y
-      with ops.device("GPU"):
-        w = y + z
-      result = sess.run(w, {x: [1.5, 0.5]})
-    self.assertAllClose(result, [12., 2.], rtol=1e-3)
+          inputs = np.random.randint(-100, 100, shape).astype(dtype)
+          result = sess.run(z, {x: inputs})
+        self.assertAllCloseAccordingToType(result, inputs + inputs)
 
-  def testLoops(self):
-    """Tests that loops work on XLA devices."""
-
-    with session_lib.Session() as session:
-      x = array_ops.placeholder(dtypes.float32)
-      with ops.device("device:XLA_CPU:0"):
-        c = lambda i, _: math_ops.less(i, 5)
-        b = lambda i, x: (i + 1, x * 2.0 + 1.0)
-        _, y = control_flow_ops.while_loop(c, b, (constant_op.constant(0), x))
-
-      result = session.run(y, {x: np.float32(2)})
-      self.assertAllClose(result, np.float32(95), rtol=1e-3)
-
-  def testCond(self):
-    """Tests that tf.cond works on XLA devices."""
-
-    with session_lib.Session() as session:
-      x = array_ops.placeholder(dtypes.float32)
-      y = array_ops.placeholder(dtypes.float32)
-      c = array_ops.placeholder(dtypes.bool)
-      with ops.device("device:XLA_CPU:0"):
-        z = x + 1.0
-        w = control_flow_ops.cond(c, lambda: z, lambda: y)
-        t = math_ops.add(z, w)
-
-      result = session.run(t, {x: np.float32(2), y: np.float32(4), c: True})
-      self.assertAllClose(result, np.float32(6), rtol=1e-3)
+  def testControlTrigger(self):
+    with self.test_session() as sess:
+      with self.test_scope():
+        x = gen_control_flow_ops.control_trigger()
+      sess.run(x)
 
 
 if __name__ == "__main__":

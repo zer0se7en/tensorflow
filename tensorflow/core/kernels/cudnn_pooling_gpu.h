@@ -38,11 +38,12 @@ template <typename T>
 class DnnPooling3dOp {
  public:
   static void Compute(OpKernelContext* context,
-                      perftools::gputools::dnn::PoolingMode pooling_mode,
+                      se::dnn::PoolingMode pooling_mode,
                       const std::array<int64, 3>& size,
                       const std::array<int64, 3>& stride,
                       const std::array<int64, 3>& padding,
-                      const Tensor& tensor_in, Tensor* output);
+                      TensorFormat data_format, const Tensor& tensor_in,
+                      Tensor* output);
 };
 
 // Computes the gradient of (avg/max)pooling on GPU.
@@ -51,12 +52,12 @@ template <typename T>
 class DnnPooling3dGradOp {
  public:
   static void Compute(OpKernelContext* context,
-                      perftools::gputools::dnn::PoolingMode pooling_mode,
+                      se::dnn::PoolingMode pooling_mode,
                       const std::array<int64, 3>& window,
                       const std::array<int64, 3>& stride,
                       const std::array<int64, 3>& padding,
                       const std::array<int64, 3>& output_size,
-                      const Tensor& out_backprop,
+                      TensorFormat data_format, const Tensor& out_backprop,
                       const TensorShape& tensor_in_shape,
                       const Tensor* tensor_in, const Tensor* tensor_out,
                       Tensor* input_backprop);

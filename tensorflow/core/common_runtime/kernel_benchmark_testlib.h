@@ -35,10 +35,11 @@ namespace test {
 
 class Benchmark {
  public:
-  // "device" must be either "cpu" or "gpu".  Takes ownership of "g"
-  // and "init".
+  // "device" must be either "cpu" or "gpu".  Takes ownership of "g",
+  // "init", and one reference on "rendez" (if not null).
   Benchmark(const string& device, Graph* g,
-            const SessionOptions* options = nullptr, Graph* init = nullptr);
+            const SessionOptions* options = nullptr, Graph* init = nullptr,
+            Rendezvous* rendez = nullptr, const char* executor_type = "");
   ~Benchmark();
 
   // Executes the graph for "iters" times.
@@ -56,7 +57,7 @@ class Benchmark {
   thread::ThreadPool* pool_ = nullptr;
   Device* device_ = nullptr;
   Rendezvous* rendez_ = nullptr;
-  Executor* exec_ = nullptr;
+  std::unique_ptr<Executor> exec_;
 
   TF_DISALLOW_COPY_AND_ASSIGN(Benchmark);
 };

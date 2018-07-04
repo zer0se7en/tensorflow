@@ -66,7 +66,7 @@ namespace parsed {
 class Feature {
  public:
   Feature() {}
-  Feature(StringPiece serialized) : serialized_(serialized) {}
+  explicit Feature(StringPiece serialized) : serialized_(serialized) {}
 
   Status ParseDataType(DataType* dtype) {
     DCHECK(dtype != nullptr);
@@ -89,14 +89,34 @@ class Feature {
       default:
         // Initialize variable to avoid compiler warning
         *dtype = DT_INVALID;
-        return errors::InvalidArgument("Unsuported datatype.");
+        return errors::InvalidArgument("Unsupported datatype.");
     }
     return Status::OK();
+  }
+
+  bool GetNumElementsInBytesList(int* num_elements) {
+    protobuf::io::CodedInputStream stream(
+        reinterpret_cast<const uint8*>(serialized_.data()), serialized_.size());
+    EnableAliasing(&stream);
+    uint32 length = 0;
+    if (!stream.ReadVarint32(&length)) return false;
+    auto limit = stream.PushLimit(length);
+    *num_elements = 0;
+    while (!stream.ExpectAtEnd()) {
+      if (!stream.ExpectTag(kDelimitedTag(1))) return false;
+      uint32 bytes_length = 0;
+      if (!stream.ReadVarint32(&bytes_length)) return false;
+      if (!stream.Skip(bytes_length)) return false;
+      ++*num_elements;
+    }
+    stream.PopLimit(limit);
+    return true;
   }
 
   template <typename Result>
   bool ParseBytesList(Result* bytes_list) {
     DCHECK(bytes_list != nullptr);
+
     protobuf::io::CodedInputStream stream(
         reinterpret_cast<const uint8*>(serialized_.data()), serialized_.size());
 
@@ -333,7 +353,7 @@ bool TestFastParse(const string& serialized, Example* example) {
     // I.e. last entry in the map overwrites all the previous ones.
     parsed::FeatureMapEntry& name_and_feature =
         parsed_example[parsed_example_size - i - 1];
-    string name = name_and_feature.first.ToString();
+    string name = std::string(name_and_feature.first);
     if ((*features.mutable_feature()).count(name) > 0) continue;
 
     auto& value = (*features.mutable_feature())[name];
@@ -371,7 +391,7 @@ bool TestFastParse(const string& serialized, Example* example) {
         break;
       }
       default:
-        CHECK(false) << "Should not happen.";
+        LOG(FATAL) << "Should not happen.";
     }
   }
   return true;
@@ -447,6 +467,28 @@ class LimitedArraySlice {
   T* end_;
 };
 
+void LogDenseFeatureDataLoss(StringPiece feature_name) {
+  LOG(WARNING) << "Data loss! Feature '" << feature_name
+               << "' is present in multiple concatenated "
+                  "tf.Examples. Ignoring all but last one.";
+  static auto* duplicated_dense_feature = monitoring::Counter<0>::New(
+      "/tensorflow/core/util/example_proto_fast_parsing/"
+      "duplicated_dense_feature",
+      "Dense feature appears twice in a tf.Example");
+  duplicated_dense_feature->GetCell()->IncrementBy(1);
+}
+
+void LogSparseFeatureDataLoss(StringPiece feature_name) {
+  LOG(WARNING) << "Data loss! Feature '" << feature_name
+               << "' is present in multiple concatenated "
+                  "tf.Examples. Ignoring all but last one.";
+  static auto* duplicated_sparse_feature = monitoring::Counter<0>::New(
+      "/tensorflow/core/util/example_proto_fast_parsing/"
+      "duplicated_sparse_feature",
+      "Sparse feature appears twice in a tf.Example");
+  duplicated_sparse_feature->GetCell()->IncrementBy(1);
+}
+
 Status FastParseSerializedExample(
     const string& serialized_example, const string& example_name,
     const size_t example_index, const Config& config,
@@ -510,14 +552,7 @@ Status FastParseSerializedExample(
       // If feature was already visited, skip.
       // Compare comment at the beginning of the loop.
       if (dense_feature_last_example[d] == example_index) {
-        LOG(WARNING) << "Data loss! Feature '" << feature_name
-                     << "' in present in multiple concatenated "
-                        "tf.Examples. Ignoring all but last one.";
-        static auto* duplicated_dense_feature = monitoring::Counter<0>::New(
-            "/tensorflow/core/util/example_proto_fast_parsing/"
-            "duplicated_dense_feature",
-            "Dense feature appears twice in a tf.Example");
-        duplicated_dense_feature->GetCell()->IncrementBy(1);
+        LogDenseFeatureDataLoss(feature_name);
         continue;
       }
       dense_feature_last_example[d] = example_index;
@@ -526,7 +561,7 @@ Status FastParseSerializedExample(
         return example_error(strings::StrCat(
             "Data types don't match. Data type: ",
             DataTypeString(example_dtype),
-            "Expected type: ", DataTypeString(config.dense[d].dtype)));
+            " but expected type: ", DataTypeString(config.dense[d].dtype)));
       }
       if (!config.dense[d].variable_length) {
         Tensor& out = (*output_dense)[d];
@@ -572,7 +607,7 @@ Status FastParseSerializedExample(
             break;
           }
           default:
-            CHECK(false) << "Should not happen.";
+            LOG(FATAL) << "Should not happen.";
         }
       } else {  // if variable length
         SparseBuffer& out = (*output_varlen_dense)[d];
@@ -632,21 +667,14 @@ Status FastParseSerializedExample(
             break;
           }
           default:
-            CHECK(false) << "Should not happen.";
+            LOG(FATAL) << "Should not happen.";
         }
       }
     } else {
       // If feature was already visited, skip.
       // Compare comment at the beginning of the loop.
       if (sparse_feature_last_example[d] == example_index) {
-        LOG(WARNING) << "Data loss! Feature '" << feature_name
-                     << "' in present in multiple concatenated "
-                        "tf.Examples. Ignoring all but last one.";
-        static auto* duplicated_sparse_feature = monitoring::Counter<0>::New(
-            "/tensorflow/core/util/example_proto_fast_parsing/"
-            "duplicated_sparse_feature",
-            "sparse feature appears twice in a tf.Example");
-        duplicated_sparse_feature->GetCell()->IncrementBy(1);
+        LogSparseFeatureDataLoss(feature_name);
         continue;
       }
       sparse_feature_last_example[d] = example_index;
@@ -657,7 +685,8 @@ Status FastParseSerializedExample(
           example_dtype != config.sparse[d].dtype) {
         return example_error(strings::StrCat(
             "Data types don't match. ",
-            "Expected type: ", DataTypeString(config.sparse[d].dtype)));
+            "Expected type: ", DataTypeString(config.sparse[d].dtype),
+            ", Actual type: ", DataTypeString(example_dtype)));
       }
 
       switch (config.sparse[d].dtype) {
@@ -689,7 +718,7 @@ Status FastParseSerializedExample(
           break;
         }
         default:
-          CHECK(false) << "Should not happen.";
+          LOG(FATAL) << "Should not happen.";
       }
     }
   }
@@ -726,7 +755,7 @@ Status FastParseSerializedExample(
         break;
       }
       default:
-        CHECK(false) << "Should not happen.";
+        LOG(FATAL) << "Should not happen.";
     }
   }
 
@@ -793,8 +822,7 @@ void CopyOrMoveBlock(const string* b, const string* e, string* t) {
 template <typename T>
 void FillAndCopyVarLen(
     const int d, const size_t num_elements,
-    const size_t num_elements_per_minibatch, const size_t data_stride_size,
-    const Config& config,
+    const size_t num_elements_per_minibatch, const Config& config,
     const std::vector<std::vector<SparseBuffer>>& varlen_dense_buffers,
     Tensor* values) {
   const Tensor& default_value = config.dense[d].default_value;
@@ -803,23 +831,34 @@ void FillAndCopyVarLen(
   std::fill(values->flat<T>().data(), values->flat<T>().data() + num_elements,
             default_value.flat<T>()(0));
 
+  // Data is [batch_size, max_num_elements, data_stride_size]
+  //   and num_elements_per_minibatch = max_num_elements * data_stride_size
+  auto data = values->flat<T>().data();
+
   // Iterate over minibatch elements
   for (size_t i = 0; i < varlen_dense_buffers.size(); ++i) {
     const SparseBuffer& buffer = varlen_dense_buffers[i][d];
-    const size_t offset = i * num_elements_per_minibatch;
-    const size_t stride_size = config.dense[d].elements_per_stride;
+    // Number of examples being stored in this buffer
+    const auto& end_indices = buffer.example_end_indices;
+    const size_t examples_in_buffer = end_indices.size();
+    // const size_t stride_size = config.dense[d].elements_per_stride;
 
-    // Copy values over.
-    auto& list = GetListFromBuffer<T>(buffer);
+    const auto& list = GetListFromBuffer<T>(buffer);
     auto list_ptr = list.begin();
-    auto data = values->flat<T>().data() + offset;
-    DCHECK(list.size() % stride_size == 0);
-    const size_t num_entries = list.size() / stride_size;
-    for (size_t j = 0; j < num_entries; ++j) {
-      CopyOrMoveBlock(list_ptr, list_ptr + stride_size, data);
-      list_ptr += stride_size;
-      data += data_stride_size;
+
+    size_t elements_tally = 0;
+    // Iterate through all the examples stored in this buffer.
+    for (size_t j = 0; j < examples_in_buffer; ++j) {
+      // Number of elements stored for this example.
+      const size_t num_elems = end_indices[j] - elements_tally;
+      CopyOrMoveBlock(list_ptr, list_ptr + num_elems, data);
+      // Move forward this many elements in the varlen buffer.
+      list_ptr += num_elems;
+      // Move forward to the next minibatch entry in the values output.
+      data += num_elements_per_minibatch;
+      elements_tally = end_indices[j];
     }
+    DCHECK(elements_tally == list.size());
   }
 }
 
@@ -925,8 +964,8 @@ Status FastParseExample(const Config& config,
     for (size_t e = start; e < end; ++e) {
       status_of_minibatch[minibatch] = FastParseSerializedExample(
           serialized[e],
-          (example_names.size() > 0 ? example_names[e] : "<unknown>"), e,
-          config, config_index, hasher, &fixed_dense_values,
+          (!example_names.empty() ? example_names[e] : "<unknown>"), e, config,
+          config_index, hasher, &fixed_dense_values,
           &varlen_dense_buffers[minibatch], &sparse_buffers[minibatch]);
       if (!status_of_minibatch[minibatch].ok()) break;
     }
@@ -948,7 +987,7 @@ Status FastParseExample(const Config& config,
     size_t total_num_features = 0;
     size_t max_num_features = 0;
     for (auto& sparse_values_tmp : sparse_buffers) {
-      std::vector<size_t>& end_indices =
+      const std::vector<size_t>& end_indices =
           sparse_values_tmp[d].example_end_indices;
       total_num_features += end_indices.back();
       max_num_features = std::max(max_num_features, end_indices[0]);
@@ -1013,7 +1052,7 @@ Status FastParseExample(const Config& config,
           break;
         }
         default:
-          CHECK(false) << "Should not happen.";
+          LOG(FATAL) << "Should not happen.";
       }
 
       offset += delta;
@@ -1055,32 +1094,25 @@ Status FastParseExample(const Config& config,
     if (num_elements == 0) return;
 
     const size_t num_elements_per_minibatch = num_elements / batch_size;
-    const size_t data_stride_size =
-        (max_num_elements == 0)
-            ? 0
-            : (num_elements_per_minibatch / max_num_elements);
 
     switch (config.dense[d].dtype) {
       case DT_INT64: {
         FillAndCopyVarLen<int64>(d, num_elements, num_elements_per_minibatch,
-                                 data_stride_size, config, varlen_dense_buffers,
-                                 &values);
+                                 config, varlen_dense_buffers, &values);
         break;
       }
       case DT_FLOAT: {
         FillAndCopyVarLen<float>(d, num_elements, num_elements_per_minibatch,
-                                 data_stride_size, config, varlen_dense_buffers,
-                                 &values);
+                                 config, varlen_dense_buffers, &values);
         break;
       }
       case DT_STRING: {
         FillAndCopyVarLen<string>(d, num_elements, num_elements_per_minibatch,
-                                  data_stride_size, config,
-                                  varlen_dense_buffers, &values);
+                                  config, varlen_dense_buffers, &values);
         break;
       }
       default:
-        CHECK(false) << "Should not happen.";
+        LOG(FATAL) << "Should not happen.";
     }
   };
 
@@ -1090,6 +1122,334 @@ Status FastParseExample(const Config& config,
 
   for (size_t d = 0; d < config.sparse.size(); ++d) {
     MergeSparseMinibatches(d);
+  }
+
+  return Status::OK();
+}
+
+Status FastParseSingleExample(const Config& config, const string& serialized,
+                              Result* result) {
+  DCHECK(result != nullptr);
+  // Check config so we can safely CHECK(false) in switches on config.*.dtype
+  for (auto& c : config.sparse) {
+    TF_RETURN_IF_ERROR(CheckConfigDataType(c.dtype));
+  }
+  for (auto& c : config.dense) {
+    TF_RETURN_IF_ERROR(CheckConfigDataType(c.dtype));
+  }
+
+  // TODO(mrry): Cache the construction of this map at Op construction time.
+  size_t config_size = config.dense.size() + config.sparse.size();
+  SeededHasher hasher;
+  // Build config index.
+  PresizedCuckooMap<std::pair<size_t, Type>> config_index(config_size);
+  bool ok = true;
+  for (size_t i = 0; i < 1000; ++i) {
+    for (size_t d = 0; d < config.dense.size(); ++d) {
+      ok &= config_index.InsertUnique(hasher(config.dense[d].feature_name),
+                                      {d, Type::Dense});
+    }
+    for (size_t d = 0; d < config.sparse.size(); ++d) {
+      ok &= config_index.InsertUnique(hasher(config.sparse[d].feature_name),
+                                      {d, Type::Sparse});
+    }
+    if (ok) break;
+    LOG(WARNING) << "Collision found. This should happen only if you have "
+                    "around 2^32 entries in your config.";
+    hasher.seed++;
+    config_index.Clear(config_size);
+  }
+  if (!ok) {
+    return errors::Internal(
+        "Could not avoid collision. This should not happen.");
+  }
+
+  // Allocate dense output tensors.
+  for (size_t d = 0; d < config.dense.size(); ++d) {
+    if (!config.dense[d].variable_length) {
+      TensorShape values_shape;
+      if (!config.dense[d].shape.AsTensorShape(&values_shape)) {
+        return errors::Internal(
+            "Fixed-length shape was not a statically defined shape.");
+      }
+      result->dense_values.emplace_back(config.dense[d].dtype, values_shape);
+    } else {
+      // Variable-length tensor will be allocated later.
+      result->dense_values.emplace_back();
+    }
+  }
+
+  // Allocate sparse output tensors.
+  for (size_t d = 0; d < config.sparse.size(); ++d) {
+    // The dense_shape is always a vector of length 1.
+    result->sparse_shapes.emplace_back(DT_INT64, TensorShape({1}));
+    // Variable-length tensors will be allocated later.
+    result->sparse_indices.emplace_back();
+    result->sparse_values.emplace_back();
+  }
+
+  parsed::Example parsed_example;
+  if (!ParseExample(serialized, &parsed_example)) {
+    return errors::InvalidArgument("Could not parse example input, value: '",
+                                   serialized, "'");
+  }
+  std::vector<bool> sparse_feature_already_seen(config.sparse.size(), false);
+  std::vector<bool> dense_feature_already_seen(config.dense.size(), false);
+
+  // Handle features present in the example.
+  const size_t parsed_example_size = parsed_example.size();
+  for (size_t i = 0; i < parsed_example_size; ++i) {
+    // This is a logic that standard protobuf parsing is implementing.
+    // I.e. last entry in the map overwrites all the previous ones.
+    parsed::FeatureMapEntry& name_and_feature =
+        parsed_example[parsed_example_size - i - 1];
+
+    const StringPiece feature_name = name_and_feature.first;
+    parsed::Feature& feature = name_and_feature.second;
+
+    std::pair<size_t, Type> d_and_type;
+    uint64 h = hasher(feature_name);
+    if (!config_index.Find(h, &d_and_type)) continue;
+
+    size_t d = d_and_type.first;
+    bool is_dense = d_and_type.second == Type::Dense;
+
+    {
+      // Testing for PresizedCuckooMap collision.
+      // TODO(lew): Use dense_hash_map and avoid this and hasher creation.
+      const string& config_feature_name = is_dense
+                                              ? config.dense[d].feature_name
+                                              : config.sparse[d].feature_name;
+      if (feature_name != config_feature_name) continue;
+    }
+
+    auto example_error = [feature_name](StringPiece suffix) {
+      return errors::InvalidArgument("Key: ", feature_name, ".  ", suffix);
+    };
+
+    auto parse_error = [feature_name] {
+      return errors::InvalidArgument("Key: ", feature_name,
+                                     ".  Can't parse serialized Example.");
+    };
+
+    DataType example_dtype;
+    TF_RETURN_IF_ERROR(feature.ParseDataType(&example_dtype));
+    if (example_dtype == DT_INVALID) continue;
+
+    if (is_dense && !config.dense[d].variable_length) {
+      // If feature was already visited, skip.
+      // Compare comment at the beginning of the loop.
+      if (dense_feature_already_seen[d]) {
+        LogDenseFeatureDataLoss(feature_name);
+        continue;
+      }
+      dense_feature_already_seen[d] = true;
+
+      if (example_dtype != config.dense[d].dtype) {
+        return example_error(strings::StrCat(
+            "Data types don't match. Data type: ",
+            DataTypeString(example_dtype),
+            " but expected type: ", DataTypeString(config.dense[d].dtype)));
+      }
+
+      Tensor* out = &result->dense_values[d];
+      const std::size_t num_elements = config.dense[d].elements_per_stride;
+
+      switch (example_dtype) {
+        case DT_INT64: {
+          auto out_p = out->flat<int64>().data();
+          LimitedArraySlice<int64> slice(out_p, num_elements);
+          if (!feature.ParseInt64List(&slice)) return parse_error();
+          if (slice.EndDistance() != 0) {
+            return parse_error();
+          }
+          break;
+        }
+        case DT_FLOAT: {
+          auto out_p = out->flat<float>().data();
+          LimitedArraySlice<float> slice(out_p, num_elements);
+          if (!feature.ParseFloatList(&slice)) return parse_error();
+          if (slice.EndDistance() != 0) {
+            return parse_error();
+          }
+          break;
+        }
+        case DT_STRING: {
+          auto out_p = out->flat<string>().data();
+          LimitedArraySlice<string> slice(out_p, num_elements);
+          if (!feature.ParseBytesList(&slice)) return parse_error();
+          if (slice.EndDistance() != 0) {
+            return parse_error();
+          }
+          break;
+        }
+        default:
+          LOG(FATAL) << "Should not happen.";
+      }
+
+    } else {  // if variable length
+      SparseBuffer out_temp;
+      const size_t num_elements_divisor =
+          is_dense ? config.dense[d].elements_per_stride : 1;
+      size_t num_elements;
+
+      if (is_dense) {
+        // If feature was already visited, skip.
+        // Compare comment at the beginning of the loop.
+        if (dense_feature_already_seen[d]) {
+          LogDenseFeatureDataLoss(feature_name);
+          continue;
+        }
+        dense_feature_already_seen[d] = true;
+        if (example_dtype != config.dense[d].dtype) {
+          return example_error(strings::StrCat(
+              "Data types don't match. Data type: ",
+              DataTypeString(example_dtype),
+              " but expected type: ", DataTypeString(config.dense[d].dtype)));
+        }
+      } else {
+        // If feature was already visited, skip.
+        // Compare comment at the beginning of the loop.
+        if (sparse_feature_already_seen[d]) {
+          LogSparseFeatureDataLoss(feature_name);
+          continue;
+        }
+        sparse_feature_already_seen[d] = true;
+
+        // Handle sparse features.
+        if (example_dtype != DT_INVALID &&
+            example_dtype != config.sparse[d].dtype) {
+          return example_error(strings::StrCat(
+              "Data types don't match. ",
+              "Expected type: ", DataTypeString(config.sparse[d].dtype),
+              ", Actual type: ", DataTypeString(example_dtype)));
+        }
+      }
+
+      switch (example_dtype) {
+        case DT_INT64: {
+          // TODO(mrry): Use the fact that the `int64_list` is packed to read
+          // out the length and pre-allocate the output tensor.
+          if (!feature.ParseInt64List(&out_temp.int64_list))
+            return parse_error();
+          num_elements = out_temp.int64_list.size();
+          break;
+        }
+        case DT_FLOAT: {
+          // TODO(mrry): Use the fact that the `float_list` is packed to read
+          // out the length and pre-allocate the output tensor.
+          if (!feature.ParseFloatList(&out_temp.float_list))
+            return parse_error();
+          num_elements = out_temp.float_list.size();
+          break;
+        }
+        case DT_STRING: {
+          int actual_num_elements = 0;
+          if (!feature.GetNumElementsInBytesList(&actual_num_elements)) {
+            return parse_error();
+          }
+          out_temp.bytes_list.reserve(actual_num_elements);
+          if (!feature.ParseBytesList(&out_temp.bytes_list))
+            return parse_error();
+          num_elements = out_temp.bytes_list.size();
+          break;
+        }
+        default:
+          LOG(FATAL) << "Should not happen. " << DataTypeString(example_dtype);
+      }
+
+      if (num_elements % num_elements_divisor != 0) {
+        return parse_error();
+      }
+
+      Tensor* out;
+      if (is_dense) {
+        TensorShape values_shape;
+        values_shape.AddDim(num_elements / num_elements_divisor);
+        for (int i = 1; i < config.dense[d].shape.dims(); ++i) {
+          values_shape.AddDim(config.dense[d].shape.dim_size(i));
+        }
+
+        out = &result->dense_values[d];
+        *out = Tensor(config.dense[d].dtype, values_shape);
+
+      } else {
+        Tensor* out_indices = &result->sparse_indices[d];
+        Tensor* out_dense_shape = &result->sparse_shapes[d];
+        out = &result->sparse_values[d];
+
+        // TODO(mrry): Investigate the possibility of not materializing
+        // the indices (and perhaps dense_shape) until they are needed.
+        *out_indices = Tensor(
+            DT_INT64, TensorShape({static_cast<int64>(num_elements), 1}));
+        auto indices_flat = out_indices->flat<int64>();
+        for (size_t i = 0; i < num_elements; ++i) {
+          indices_flat(i) = static_cast<int64>(i);
+        }
+
+        *out_dense_shape = Tensor(DT_INT64, TensorShape({1}));
+        auto shapes_shape_t = out_dense_shape->vec<int64>();
+        shapes_shape_t(0) = num_elements;
+
+        *out = Tensor(config.sparse[d].dtype,
+                      TensorShape({static_cast<int64>(num_elements)}));
+      }
+
+      switch (example_dtype) {
+        case DT_INT64: {
+          CopyOrMoveBlock(out_temp.int64_list.begin(),
+                          out_temp.int64_list.end(), out->flat<int64>().data());
+          break;
+        }
+        case DT_FLOAT: {
+          CopyOrMoveBlock(out_temp.float_list.begin(),
+                          out_temp.float_list.end(), out->flat<float>().data());
+          break;
+        }
+        case DT_STRING: {
+          CopyOrMoveBlock(out_temp.bytes_list.begin(),
+                          out_temp.bytes_list.end(),
+                          out->flat<string>().data());
+          break;
+        }
+        default:
+          LOG(FATAL) << "Should not happen.";
+      }
+    }
+  }
+
+  // Handle missing dense features.
+  for (size_t d = 0; d < config.dense.size(); ++d) {
+    if (!dense_feature_already_seen[d]) {
+      if (!config.dense[d].variable_length) {
+        // Handle missing fixed-length dense feature.
+        if (config.dense[d].default_value.NumElements() == 0) {
+          return errors::InvalidArgument(
+              "Feature: ", config.dense[d].feature_name,
+              " (data type: ", DataTypeString(config.dense[d].dtype), ")",
+              " is required but could not be found.");
+        }
+        result->dense_values[d] = config.dense[d].default_value;
+      } else {
+        // Handle missing varlen dense feature.
+        TensorShape empty_shape;
+        empty_shape.AddDim(0);
+        for (int i = 1; i < config.dense[d].shape.dims(); ++i) {
+          empty_shape.AddDim(config.dense[d].shape.dim_size(i));
+        }
+        result->dense_values[d] = Tensor(config.dense[d].dtype, empty_shape);
+      }
+    }
+  }
+
+  // Handle missing sparse features.
+  for (size_t d = 0; d < config.sparse.size(); ++d) {
+    if (!sparse_feature_already_seen[d]) {
+      result->sparse_indices[d] = Tensor(DT_INT64, TensorShape({0, 1}));
+      result->sparse_values[d] =
+          Tensor(config.sparse[d].dtype, TensorShape({0}));
+      result->sparse_shapes[d].vec<int64>()(0) = 0;
+    }
   }
 
   return Status::OK();

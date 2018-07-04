@@ -37,14 +37,14 @@ namespace {
 // patterns to match.
 //
 // Each ExprTree node is comprised of an HloOpcode, and a set of operands (each
-// of type ExprTree). Operands can be added by specifing the index and HloOpcode
-// of the operand.
+// of type ExprTree). Operands can be added by specifying the index and
+// HloOpcode of the operand.
 //
 // For example, the following computation:
 //
 //            Parameter
 //               |
-//   Const  GetTupleElemet
+//   Const  GetTupleElement
 //      \   /
 //       Add (root)
 //
@@ -62,7 +62,7 @@ namespace {
 //                                &tagged_instructions));
 //
 // Instructions that are "tagged" with a context-specific string will
-// be returned in 'tagged_instructions' for further procesing (i.e. parsing
+// be returned in 'tagged_instructions' for further processing (i.e. parsing
 // constants or recording the tuple_index).
 //
 class ExprTree {
@@ -122,10 +122,12 @@ class ExprTree {
   Status Match(const HloInstruction* instruction,
                TaggedInstructionMap* tagged_instructions) const {
     if (opcode_ != instruction->opcode()) {
-      return InvalidArgument("Unexpected opcode: %s",
-                             HloOpcodeString(instruction->opcode()).c_str());
+      return InvalidArgument("got opcode %s, want %s",
+                             HloOpcodeString(instruction->opcode()).c_str(),
+                             HloOpcodeString(opcode_).c_str());
     }
 
+    VLOG(2) << "Matched " << HloOpcodeString(opcode_) << ": " << tag_;
     if (!tag_.empty()) {
       tagged_instructions->insert({tag_, instruction});
     }
@@ -142,7 +144,7 @@ class ExprTree {
       TF_RETURN_IF_ERROR(pair.second->Match(instruction->operand(pair.first),
                                             tagged_instructions));
     }
-    return tensorflow::Status::OK();
+    return Status::OK();
   }
 
  private:
@@ -166,8 +168,8 @@ class MatcherBase {
   virtual ~MatcherBase() {}
 
   // Attempts to match each ExprTree in 'expr_trees_'.
-  // Returns OK on the first succesful match, error status otherwise.
-  virtual tensorflow::Status Run() {
+  // Returns OK on the first successful match, error status otherwise.
+  virtual Status Run() {
     Status status;
     for (const ExprTree& expr_tree : expr_trees_) {
       status = MatchExprTree(expr_tree);
@@ -195,12 +197,11 @@ class MatcherBase {
       return InvalidArgument("Must use S32 or S64 integral types.");
     }
     if (type == S32) {
-      *const_value =
-          static_cast<int64>(LiteralUtil::GetFirstElement<int32>(literal));
+      *const_value = static_cast<int64>(literal.GetFirstElement<int32>());
     } else if (type == S64) {
-      *const_value = LiteralUtil::GetFirstElement<int64>(literal);
+      *const_value = literal.GetFirstElement<int64>();
     }
-    return tensorflow::Status::OK();
+    return Status::OK();
   }
 
   StatusOr<const HloInstruction*> GetTaggedInstruction(
@@ -221,7 +222,7 @@ class MatcherBase {
   TF_DISALLOW_COPY_AND_ASSIGN(MatcherBase);
 };
 
-// WhileConditionComputationMatcher attempst to match a target computation
+// WhileConditionComputationMatcher attempts to match a target computation
 // pattern in the while condition sub-computation.
 // If the target pattern is matched, two pieces of information are extracted
 // from 'tagged' instructions returned by the matcher:
@@ -238,7 +239,7 @@ class MatcherBase {
 //
 class WhileConditionComputationMatcher : public MatcherBase {
  public:
-  WhileConditionComputationMatcher(const HloComputation* computation)
+  explicit WhileConditionComputationMatcher(const HloComputation* computation)
       : computation_(computation) {
     expr_trees_.emplace_back(BuildCondExprTree());
   }
@@ -275,6 +276,7 @@ class WhileConditionComputationMatcher : public MatcherBase {
   }
 
   Status MatchExprTree(const ExprTree& expr_tree) override {
+    VLOG(2) << "MATCHING while condition";
     ExprTree::TaggedInstructionMap tagged_instructions;
     TF_RETURN_IF_ERROR(expr_tree.Match(computation_->root_instruction(),
                                        &tagged_instructions));
@@ -306,14 +308,14 @@ class WhileConditionComputationMatcher : public MatcherBase {
         GetTaggedInstruction("gte.fusion_param.param0", tagged_instructions));
     CHECK_EQ(HloOpcode::kParameter, gte_fusion_param0->opcode());
     CHECK(gte_fusion_param0->IsFused());
-    if (gte_fusion_param0->fusion_instruction()->operand(
+    if (gte_fusion_param0->parent()->FusionInstruction()->operand(
             gte_fusion_param0->parameter_number()) !=
         computation_->parameter_instruction(0)) {
       return InvalidArgument("Could not match fusion param: %s",
                              gte_fusion_param0->name().c_str());
     }
 
-    return tensorflow::Status::OK();
+    return Status::OK();
   }
 
   const HloComputation* computation_;
@@ -344,10 +346,6 @@ class WhileInitOperandMatcher : public MatcherBase {
   //
   //             Const
   //               |
-  //             Tuple1
-  //               |
-  //             GTE0
-  //               |
   //             Copy
   //               |
   //             Tuple0
@@ -355,15 +353,15 @@ class WhileInitOperandMatcher : public MatcherBase {
   //             While
   //
   ExprTree BuildInitExprTree() {
-    ExprTree gte0(HloOpcode::kGetTupleElement, "gte",
-                  ExprTree(HloOpcode::kTuple, tuple_index_,
-                           ExprTree(HloOpcode::kConstant, "loop_start")));
-    return ExprTree(HloOpcode::kWhile, "while",
-                    ExprTree(HloOpcode::kTuple, tuple_index_,
-                             ExprTree(HloOpcode::kCopy, gte0)));
+    return ExprTree(
+        HloOpcode::kWhile, "while",
+        ExprTree(HloOpcode::kTuple, tuple_index_,
+                 ExprTree(HloOpcode::kCopy,
+                          ExprTree(HloOpcode::kConstant, "loop_start"))));
   }
 
   Status MatchExprTree(const ExprTree& expr_tree) override {
+    VLOG(2) << "MATCHING while init";
     ExprTree::TaggedInstructionMap tagged_instructions;
     TF_RETURN_IF_ERROR(expr_tree.Match(while_hlo_, &tagged_instructions));
 
@@ -375,21 +373,13 @@ class WhileInitOperandMatcher : public MatcherBase {
                              while_hlo->name().c_str());
     }
 
-    // Get tagged GTE instruction and check 'tuple_index_'.
-    TF_ASSIGN_OR_RETURN(const HloInstruction* gte,
-                        GetTaggedInstruction("gte", tagged_instructions));
-    if (gte->tuple_index() != tuple_index_) {
-      return InvalidArgument("Unexpected tuple index instruction : %s",
-                             gte->name().c_str());
-    }
-
     // Get tagged Constant instruction and parse 'loop_start_'.
     TF_ASSIGN_OR_RETURN(
         const HloInstruction* const_hlo,
         GetTaggedInstruction("loop_start", tagged_instructions));
     TF_RETURN_IF_ERROR(ParseConstInteger(const_hlo, &loop_start_));
 
-    return tensorflow::Status::OK();
+    return Status::OK();
   }
 
   const HloInstruction* while_hlo_;
@@ -427,10 +417,6 @@ class WhileBodyComputationMatcher : public MatcherBase {
   //                     \  /              \  /
   //                    Fusion -----------> Add
   //                      |
-  //                     Tuple1
-  //                      |
-  //                     GTE0
-  //                      |
   //                     Copy
   //                      |
   //                     Tuple0
@@ -450,15 +436,13 @@ class WhileBodyComputationMatcher : public MatcherBase {
     fusion.SetFusedRoot(fused_root);
 
     // Build top-level computation.
-    ExprTree tuple0(
-        HloOpcode::kTuple, tuple_index_,
-        ExprTree(HloOpcode::kCopy,
-                 ExprTree(HloOpcode::kGetTupleElement, "gte",
-                          ExprTree(HloOpcode::kTuple, tuple_index_, fusion))));
+    ExprTree tuple0(HloOpcode::kTuple, tuple_index_,
+                    ExprTree(HloOpcode::kCopy, fusion));
     return tuple0;
   }
 
   Status MatchExprTree(const ExprTree& expr_tree) override {
+    VLOG(2) << "MATCHING while body";
     ExprTree::TaggedInstructionMap tagged_instructions;
     TF_RETURN_IF_ERROR(expr_tree.Match(computation_->root_instruction(),
                                        &tagged_instructions));
@@ -473,8 +457,8 @@ class WhileBodyComputationMatcher : public MatcherBase {
         return InvalidArgument("Unexpected tuple index instruction : %s",
                                inst->name().c_str());
       } else if (tag == "loop_increment") {
-        // Parse the constant which represents the loop induction variable
-        // increment value.
+        // ParseHloString the constant which represents the loop induction
+        // variable increment value.
         TF_RETURN_IF_ERROR(ParseConstInteger(inst, &loop_increment_));
       } else if (tag == "param0" &&
                  inst != computation_->parameter_instruction(0)) {
@@ -485,14 +469,15 @@ class WhileBodyComputationMatcher : public MatcherBase {
         // Fusion parameter: lookup and compare with associated fusion operand.
         CHECK_EQ(HloOpcode::kParameter, inst->opcode());
         CHECK(inst->IsFused());
-        if (inst->fusion_instruction()->operand(inst->parameter_number()) !=
+        if (inst->parent()->FusionInstruction()->operand(
+                inst->parameter_number()) !=
             computation_->parameter_instruction(0)) {
           return InvalidArgument("Could not match fusion param: %s",
                                  inst->name().c_str());
         }
       }
     }
-    return tensorflow::Status::OK();
+    return Status::OK();
   }
 
   const HloComputation* computation_;

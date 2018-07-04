@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef THIRD_PARTY_TENSORFLOW_CORE_UTIL_EXAMPLE_PROTO_FAST_PARSING_H_
-#define THIRD_PARTY_TENSORFLOW_CORE_UTIL_EXAMPLE_PROTO_FAST_PARSING_H_
+#ifndef TENSORFLOW_CORE_UTIL_EXAMPLE_PROTO_FAST_PARSING_H_
+#define TENSORFLOW_CORE_UTIL_EXAMPLE_PROTO_FAST_PARSING_H_
 
 #include <string>
 #include <unordered_map>
@@ -45,7 +45,7 @@ struct FastParseExampleConfig {
     DataType dtype;
     // These 2 fields correspond exactly to dense_shapes and dense_defaults in
     // ParseExample op.
-    // Documentation is avaliable in: tensorflow/core/ops/parsing_ops.cc
+    // Documentation is available in: tensorflow/core/ops/parsing_ops.cc
     PartialTensorShape shape;
     Tensor default_value;
     bool variable_length;
@@ -62,7 +62,7 @@ struct FastParseExampleConfig {
 };
 
 // This is exactly the output of TF's ParseExample Op.
-// Documentation is avaliable in: tensorflow/core/ops/parsing_ops.cc
+// Documentation is available in: tensorflow/core/ops/parsing_ops.cc
 struct Result {
   std::vector<Tensor> sparse_indices;
   std::vector<Tensor> sparse_values;
@@ -79,6 +79,12 @@ Status FastParseExample(const FastParseExampleConfig& config,
                         gtl::ArraySlice<string> example_names,
                         thread::ThreadPool* thread_pool, Result* result);
 
+// TODO(mrry): Move the hash table construction into the config object.
+typedef FastParseExampleConfig FastParseSingleExampleConfig;
+
+Status FastParseSingleExample(const FastParseSingleExampleConfig& config,
+                              const string& serialized, Result* result);
+
 // This function parses serialized Example and populates given example.
 // It uses the same specialized parser as FastParseExample which is efficient.
 // But then constructs Example which is relatively slow.
@@ -88,4 +94,4 @@ bool TestFastParse(const string& serialized, Example* example);
 }  // namespace example
 }  // namespace tensorflow
 
-#endif  // THIRD_PARTY_TENSORFLOW_CORE_UTIL_EXAMPLE_PROTO_FAST_PARSING_H_
+#endif  // TENSORFLOW_CORE_UTIL_EXAMPLE_PROTO_FAST_PARSING_H_

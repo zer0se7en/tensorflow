@@ -20,6 +20,7 @@ limitations under the License.
 #include "tensorflow/core/common_runtime/executor.h"
 #include "tensorflow/core/common_runtime/graph_optimizer.h"
 #include "tensorflow/core/framework/function.h"
+#include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -105,11 +106,20 @@ static Node* AddSymGrad(Graph* g, Node* n, gtl::ArraySlice<NodeOut> grads) {
   AddNodeAttr("Tin", in_types, &ndef);
 
   // The gradient node's outputs have the same types as the node 'n's
-  // inputs.
-  AddNodeAttr("Tout", n->input_types(), &ndef);
+  // inputs, except for resources.
+  DataTypeVector out_types = n->input_types();
+  for (int i = 0; i < out_types.size(); ++i) {
+    if (out_types[i] == DT_RESOURCE) {
+      // TODO(apassos): figure out how to get the right dtype
+      out_types[i] = DT_FLOAT;
+    }
+  }
+  AddNodeAttr("Tout", out_types, &ndef);
   NameAttrList func;
   func.set_name(n->type_string());
-  *(func.mutable_attr()) = n->def().attr();
+  for (const auto& attr : n->attrs()) {
+    (*func.mutable_attr())[attr.first] = attr.second;
+  }
   AddNodeAttr("f", func, &ndef);
   Status s;
   Node* ret = g->AddNode(ndef, &s);

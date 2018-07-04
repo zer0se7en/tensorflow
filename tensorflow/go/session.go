@@ -1,16 +1,18 @@
-// Copyright 2016 The TensorFlow Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+Copyright 2016 The TensorFlow Authors. All Rights Reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 package tensorflow
 
@@ -20,6 +22,7 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -47,9 +50,12 @@ type Session struct {
 // options may be nil to use the default options.
 func NewSession(graph *Graph, options *SessionOptions) (*Session, error) {
 	status := newStatus()
-	cOpt := options.c()
+	cOpt, doneOpt, err := options.c()
+	defer doneOpt()
+	if err != nil {
+		return nil, err
+	}
 	cSess := C.TF_NewSession(graph.c, cOpt, status.c)
-	C.TF_DeleteSessionOptions(cOpt)
 	if err := status.Err(); err != nil {
 		return nil, err
 	}
@@ -57,6 +63,51 @@ func NewSession(graph *Graph, options *SessionOptions) (*Session, error) {
 	s := &Session{c: cSess}
 	runtime.SetFinalizer(s, func(s *Session) { s.Close() })
 	return s, nil
+}
+
+// Device structure contains information about a device associated with a session, as returned by ListDevices()
+type Device struct {
+	Name, Type       string
+	MemoryLimitBytes int64
+}
+
+// Return list of devices associated with a Session
+func (s *Session) ListDevices() ([]Device, error) {
+	var devices []Device
+
+	status := newStatus()
+	devices_list := C.TF_SessionListDevices(s.c, status.c)
+	if err := status.Err(); err != nil {
+		return nil, fmt.Errorf("SessionListDevices() failed: %v", err)
+	}
+	defer C.TF_DeleteDeviceList(devices_list)
+
+	for i := 0; i < int(C.TF_DeviceListCount(devices_list)); i++ {
+		device_name := C.TF_DeviceListName(devices_list, C.int(i), status.c)
+		if err := status.Err(); err != nil {
+			return nil, fmt.Errorf("DeviceListName(index=%d) failed: %v", i, err)
+		}
+
+		device_type := C.TF_DeviceListType(devices_list, C.int(i), status.c)
+		if err := status.Err(); err != nil {
+			return nil, fmt.Errorf("DeviceListType(index=%d) failed: %v", i, err)
+		}
+
+		memory_limit_bytes := C.TF_DeviceListMemoryBytes(devices_list, C.int(i), status.c)
+		if err := status.Err(); err != nil {
+			return nil, fmt.Errorf("DeviceListMemoryBytes(index=%d) failed: %v", i, err)
+		}
+
+		device := Device{
+			Name:             C.GoString(device_name),
+			Type:             C.GoString(device_type),
+			MemoryLimitBytes: int64(memory_limit_bytes),
+		}
+
+		devices = append(devices, device)
+	}
+
+	return devices, nil
 }
 
 // Run the graph with the associated session starting with the supplied feeds
@@ -83,6 +134,10 @@ func (s *Session) Run(feeds map[Output]*Tensor, fetches []Output, targets []*Ope
 		ptrOutput(c.fetches), ptrTensor(c.fetchTensors), C.int(len(fetches)),
 		ptrOperation(c.targets), C.int(len(targets)),
 		nil, status.c)
+
+	// Make sure GC won't harvest input tensors until SessionRun() is finished
+	runtime.KeepAlive(feeds)
+
 	if err := status.Err(); err != nil {
 		return nil, err
 	}
@@ -193,7 +248,7 @@ func (s *Session) NewPartialRun(feeds, fetches []Output, targets []*Operation) (
 		return nil, err
 	}
 	runtime.SetFinalizer(pr, func(pr *PartialRun) {
-		deletePRunHandle(pr.handle)
+		C.TF_DeletePRunHandle(pr.handle)
 	})
 	return pr, nil
 }
@@ -243,19 +298,42 @@ type SessionOptions struct {
 	// If the session disconnects from the remote process during its
 	// lifetime, session calls may fail immediately.
 	Target string
+
+	// Config is a binary-serialized representation of the
+	// tensorflow.ConfigProto protocol message
+	// (https://www.tensorflow.org/code/tensorflow/core/protobuf/config.proto).
+	Config []byte
 }
 
 // c converts the SessionOptions to the C API's TF_SessionOptions. Callers must
-// deallocate by calling C.TF_DeleteSessionOptions().
-func (o *SessionOptions) c() *C.TF_SessionOptions {
+// deallocate by calling the returned done() closure.
+func (o *SessionOptions) c() (ret *C.TF_SessionOptions, done func(), err error) {
 	opt := C.TF_NewSessionOptions()
 	if o == nil {
-		return opt
+		return opt, func() { C.TF_DeleteSessionOptions(opt) }, nil
 	}
 	t := C.CString(o.Target)
 	C.TF_SetTarget(opt, t)
 	C.free(unsafe.Pointer(t))
-	return opt
+
+	var cConfig unsafe.Pointer
+	if sz := len(o.Config); sz > 0 {
+		status := newStatus()
+		// Copying into C-memory is the simplest thing to do in terms
+		// of memory safety and cgo rules ("C code may not keep a copy
+		// of a Go pointer after the call returns" from
+		// https://golang.org/cmd/cgo/#hdr-Passing_pointers).
+		cConfig = C.CBytes(o.Config)
+		C.TF_SetConfig(opt, cConfig, C.size_t(sz), status.c)
+		if err := status.Err(); err != nil {
+			C.TF_DeleteSessionOptions(opt)
+			return nil, func() {}, fmt.Errorf("invalid SessionOptions.Config: %v", err)
+		}
+	}
+	return opt, func() {
+		C.TF_DeleteSessionOptions(opt)
+		C.free(cConfig)
+	}, nil
 }
 
 // cRunArgs translates the arguments to Session.Run and PartialRun.Run into

@@ -19,6 +19,7 @@ limitations under the License.
 #include "tensorflow/compiler/tf2xla/xla_helpers.h"
 #include "tensorflow/compiler/tf2xla/xla_op_kernel.h"
 #include "tensorflow/compiler/tf2xla/xla_op_registry.h"
+#include "tensorflow/compiler/xla/client/xla_client/xla_builder.h"
 #include "tensorflow/compiler/xla/literal_util.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -50,7 +51,7 @@ class ReshapeOp : public XlaOpKernel {
     int64 product = 1;
     int unknown_index = -1;
     for (int d = 0; d < num_dims; ++d) {
-      const int32 size = xla::LiteralUtil::Get<int>(literal, {d});
+      const int32 size = literal.Get<int>({d});
       if (size == -1) {
         OP_REQUIRES(
             ctx, unknown_index == -1,
@@ -90,12 +91,11 @@ class ReshapeOp : public XlaOpKernel {
     VLOG(1) << "Reshape " << input_shape.DebugString() << " "
             << shape.DebugString();
 
-    ctx->SetOutput(0,
-                   ctx->builder()->Reshape(ctx->Input(0), shape.dim_sizes()));
+    ctx->SetOutput(0, xla::Reshape(ctx->Input(0), shape.dim_sizes()));
   }
 };
 
-REGISTER_XLA_OP("Reshape", ReshapeOp);
+REGISTER_XLA_OP(Name("Reshape").CompileTimeConstInput("shape"), ReshapeOp);
 
 }  // namespace
 }  // namespace tensorflow

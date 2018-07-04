@@ -13,9 +13,12 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Integration and ODE solvers. See the @{$python/contrib.integrate} guide.
+"""Integration and ODE solvers.
+
+See the @{$python/contrib.integrate} guide.
 
 @@odeint
+@@odeint_fixed
 """
 
 from __future__ import absolute_import

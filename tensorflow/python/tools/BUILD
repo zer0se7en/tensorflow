@@ -9,11 +9,44 @@ exports_files(["LICENSE"])
 
 load("//tensorflow:tensorflow.bzl", "py_test")
 
+# Transitive dependencies of this target will be included in the pip package.
+py_library(
+    name = "tools_pip",
+    deps = [
+        ":freeze_graph",
+        ":import_pb_to_tensorboard",
+        ":inspect_checkpoint",
+        ":optimize_for_inference",
+        ":print_selective_registration_header",
+        ":saved_model_cli",
+        ":saved_model_utils",
+        ":strip_unused",
+    ],
+)
+
+py_library(
+    name = "saved_model_utils",
+    srcs = ["saved_model_utils.py"],
+    srcs_version = "PY2AND3",
+    deps = ["//tensorflow/contrib/saved_model:reader"],
+)
+
 py_library(
     name = "freeze_graph_lib",
     srcs = ["freeze_graph.py"],
     srcs_version = "PY2AND3",
-    deps = ["//tensorflow:tensorflow_py"],
+    deps = [
+        ":saved_model_utils",
+        "//tensorflow/core:protos_all_py",
+        "//tensorflow/python:client",
+        "//tensorflow/python:framework",
+        "//tensorflow/python:no_contrib",  # TODO(b/34059704): remove when fixed
+        "//tensorflow/python:parsing_ops",
+        "//tensorflow/python:platform",
+        "//tensorflow/python:training",
+        "//tensorflow/python/saved_model:loader",
+        "@six_archive//:six",
+    ],
 )
 
 py_binary(
@@ -21,13 +54,21 @@ py_binary(
     srcs = ["freeze_graph.py"],
     srcs_version = "PY2AND3",
     deps = [
+        ":freeze_graph_lib",
+    ],
+)
+
+py_binary(
+    name = "import_pb_to_tensorboard",
+    srcs = ["import_pb_to_tensorboard.py"],
+    srcs_version = "PY2AND3",
+    deps = [
         "//tensorflow/core:protos_all_py",
-        "//tensorflow/python",  # TODO(b/34059704): remove when fixed
         "//tensorflow/python:client",
         "//tensorflow/python:framework",
+        "//tensorflow/python:framework_ops",
         "//tensorflow/python:platform",
-        "//tensorflow/python:training",
-        "@six_archive//:six",
+        "//tensorflow/python:summary",
     ],
 )
 
@@ -106,7 +147,6 @@ py_library(
     srcs = ["optimize_for_inference_lib.py"],
     srcs_version = "PY2AND3",
     deps = [
-        ":strip_unused",
         ":strip_unused_lib",
         "//tensorflow/core:protos_all_py",
         "//tensorflow/python:framework",
@@ -152,13 +192,24 @@ py_test(
     ],
 )
 
+py_library(
+    name = "selective_registration_header_lib",
+    srcs = ["selective_registration_header_lib.py"],
+    srcs_version = "PY2AND3",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tensorflow/python",  # TODO(b/34059704): remove when fixed
+        "//tensorflow/python:platform",
+    ],
+)
+
 py_binary(
     name = "print_selective_registration_header",
     srcs = ["print_selective_registration_header.py"],
     srcs_version = "PY2AND3",
     visibility = ["//visibility:public"],
     deps = [
-        "//tensorflow/python",  # TODO(b/34059704): remove when fixed
+        ":selective_registration_header_lib",
         "//tensorflow/python:platform",
     ],
 )
@@ -168,22 +219,37 @@ py_test(
     srcs = ["print_selective_registration_header_test.py"],
     srcs_version = "PY2AND3",
     deps = [
-        ":print_selective_registration_header",
+        ":selective_registration_header_lib",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:platform",
     ],
 )
 
-filegroup(
-    name = "all_files",
-    srcs = glob(
-        ["**/*"],
-        exclude = [
-            "**/METADATA",
-            "**/OWNERS",
-            "bin/**",
-            "gen/**",
-        ],
-    ),
-    visibility = ["//tensorflow:__subpackages__"],
+py_binary(
+    name = "saved_model_cli",
+    srcs = ["saved_model_cli.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        ":saved_model_utils",
+        "//tensorflow/contrib/saved_model:saved_model_py",
+        "//tensorflow/python",
+        "//tensorflow/python/debug:local_cli_wrapper",
+    ],
+)
+
+py_test(
+    name = "saved_model_cli_test",
+    srcs = ["saved_model_cli_test.py"],
+    data = [
+        "//tensorflow/cc/saved_model:saved_model_half_plus_two",
+    ],
+    srcs_version = "PY2AND3",
+    tags = [
+        "manual",
+        "no-internal-py3",
+    ],
+    deps = [
+        ":saved_model_cli",
+        "//tensorflow/core:protos_all_py",
+    ],
 )
