@@ -57,6 +57,22 @@ TEST(BasicInterpreter, InvokeInvalidModel) {
   ASSERT_EQ(interpreter.Invoke(), kTfLiteOk);
 }
 
+TEST(BasicInterpreter, TestAllocateTensorsResetVariableTensors) {
+  Interpreter interpreter;
+  int tensor_index;
+  ASSERT_EQ(interpreter.AddTensors(1, &tensor_index), kTfLiteOk);
+  constexpr int kTensorSize = 16;
+  interpreter.SetTensorParametersReadWrite(tensor_index, kTfLiteFloat32, "",
+                                           {kTensorSize}, {}, true);
+  interpreter.SetVariables({tensor_index});
+  ASSERT_EQ(interpreter.AllocateTensors(), kTfLiteOk);
+  TfLiteTensor* tensor = interpreter.tensor(tensor_index);
+  // Ensure that variable tensors are reset to zero.
+  for (int i = 0; i < kTensorSize; ++i) {
+    ASSERT_EQ(tensor->data.f[i], 0.0f);
+  }
+}
+
 // Test size accessor functions.
 TEST(BasicInterpreter, TestSizeFunctions) {
   Interpreter interpreter;
@@ -631,18 +647,6 @@ TEST(BasicInterpreter, AllocateTwice) {
   ASSERT_EQ(old_tensor1_ptr, interpreter.tensor(1)->data.raw);
 }
 
-struct TestErrorReporter : public ErrorReporter {
-  int Report(const char* format, va_list args) override {
-    char buffer[1024];
-    int size = vsnprintf(buffer, sizeof(buffer), format, args);
-    all_reports += buffer;
-    calls++;
-    return size;
-  }
-  int calls = 0;
-  std::string all_reports;
-};
-
 TEST(BasicInterpreter, TestNullErrorReporter) {
   TestErrorReporter reporter;
   Interpreter interpreter;
@@ -652,8 +656,9 @@ TEST(BasicInterpreter, TestCustomErrorReporter) {
   TestErrorReporter reporter;
   Interpreter interpreter(&reporter);
   ASSERT_NE(interpreter.Invoke(), kTfLiteOk);
-  ASSERT_EQ(reporter.all_reports, "Invoke called on model that is not ready.");
-  ASSERT_EQ(reporter.calls, 1);
+  ASSERT_EQ(reporter.error_messages(),
+            "Invoke called on model that is not ready.");
+  ASSERT_EQ(reporter.num_calls(), 1);
 }
 
 TEST(BasicInterpreter, TestUnsupportedDelegateFunctions) {
@@ -1075,21 +1080,22 @@ class TestDelegate : public ::testing::Test {
         return kTfLiteOk;
       };
       delegate_.CopyToBufferHandle =
-          [](TfLiteDelegate* delegate, TfLiteBufferHandle buffer_handle,
-             void* data, size_t size) -> TfLiteStatus {
+          [](TfLiteContext* context, TfLiteDelegate* delegate,
+             TfLiteBufferHandle buffer_handle, void* data,
+             size_t size) -> TfLiteStatus {
         // TODO(ycling): Implement tests to test buffer copying logic.
         return kTfLiteOk;
       };
       delegate_.CopyFromBufferHandle =
-          [](TfLiteDelegate* delegate, TfLiteBufferHandle buffer_handle,
-             void* data, size_t size) -> TfLiteStatus {
+          [](TfLiteContext* context, TfLiteDelegate* delegate,
+             TfLiteBufferHandle buffer_handle, void* data,
+             size_t size) -> TfLiteStatus {
         // TODO(ycling): Implement tests to test buffer copying logic.
         return kTfLiteOk;
       };
-      delegate_.FreeBufferHandle = [](TfLiteDelegate* delegate,
-                                      TfLiteBufferHandle* handle) {
-        *handle = kTfLiteNullBufferHandle;
-      };
+      delegate_.FreeBufferHandle =
+          [](TfLiteContext* context, TfLiteDelegate* delegate,
+             TfLiteBufferHandle* handle) { *handle = kTfLiteNullBufferHandle; };
       // Store type-punned data SimpleDelegate structure.
       delegate_.data_ = reinterpret_cast<void*>(this);
     }

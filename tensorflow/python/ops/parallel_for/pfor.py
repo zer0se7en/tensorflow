@@ -592,7 +592,7 @@ class WhileOp(object):
       inputs = args[:num_enters]
       output_tas = args[num_enters:]
       # TODO(agarwal): see which outputs have consumers and only populate the
-      # TensorArrays corresonding to those. Or do those paths get trimmed out
+      # TensorArrays corresponding to those. Or do those paths get trimmed out
       # from inside the while_loop body?
       assert len(inputs) >= len(output_tas)
       assert len(inputs) == len(inputs_stacked)
@@ -2117,7 +2117,7 @@ def _convert_print(pfor_input):
 # 2a Elements written to the array are "stacked"
 # To simulate multiple TensorArrays, we may increase the dimension of each
 # element of the array. i.e. the i_th row of the j_th entry of the converted
-# TensorArray corresponds to to the j_th entry of the TensorArray in the i_th
+# TensorArray corresponds to the j_th entry of the TensorArray in the i_th
 # pfor iteration.
 #
 # 2b Elements written to the array are "unstacked"

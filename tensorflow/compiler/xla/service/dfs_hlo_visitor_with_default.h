@@ -16,7 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_XLA_SERVICE_DFS_HLO_VISITOR_WITH_DEFAULT_H_
 #define TENSORFLOW_COMPILER_XLA_SERVICE_DFS_HLO_VISITOR_WITH_DEFAULT_H_
 
-#include "tensorflow/compiler/xla/literal_util.h"
+#include "tensorflow/compiler/xla/literal.h"
 #include "tensorflow/compiler/xla/service/dfs_hlo_visitor.h"
 #include "tensorflow/compiler/xla/service/hlo_opcode.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -94,6 +94,9 @@ class DfsHloVisitorWithDefaultBase
   Status HandleCrossReplicaSum(HloInstructionPtr crs) override {
     return DefaultAction(crs);
   }
+  Status HandleAllToAll(HloInstructionPtr crs) override {
+    return DefaultAction(crs);
+  }
   Status HandleRng(HloInstructionPtr random) override {
     return DefaultAction(random);
   }
@@ -114,6 +117,9 @@ class DfsHloVisitorWithDefaultBase
   }
   Status HandleConstant(HloInstructionPtr constant) override {
     return DefaultAction(constant);
+  }
+  Status HandleIota(HloInstructionPtr iota) override {
+    return DefaultAction(iota);
   }
   Status HandleGetTupleElement(HloInstructionPtr get_tuple_element) override {
     return DefaultAction(get_tuple_element);
@@ -190,6 +196,9 @@ class DfsHloVisitorWithDefaultBase
   }
   Status HandleGather(HloInstructionPtr gather) override {
     return DefaultAction(gather);
+  }
+  Status HandleScatter(HloInstructionPtr scatter) override {
+    return DefaultAction(scatter);
   }
   Status HandleAfterAll(HloInstructionPtr token) override {
     return DefaultAction(token);

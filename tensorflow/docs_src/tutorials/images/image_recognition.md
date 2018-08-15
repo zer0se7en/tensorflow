@@ -253,7 +253,7 @@ definition with the `ToGraphDef()` function.
   TF_RETURN_IF_ERROR(session->Run({}, {output_name}, {}, out_tensors));
   return Status::OK();
 ```
-Then we create a @{tf.Session}
+Then we create a `tf.Session`
 object, which is the interface to actually running the graph, and run it,
 specifying which node we want to get the output from, and where to put the
 output data.
@@ -449,7 +449,7 @@ covering them.
 
 To find out more about implementing convolutional neural networks, you can jump
 to the TensorFlow @{$deep_cnn$deep convolutional networks tutorial},
-or start a bit more gently with our @{$layers$MNIST starter tutorial}.
+or start a bit more gently with our [Estimator MNIST tutorial](../estimators/cnn.md).
 Finally, if you want to get up to speed on research in this area, you can
 read the recent work of all the papers referenced in this tutorial.
 
