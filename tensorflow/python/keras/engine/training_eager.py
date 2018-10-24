@@ -32,6 +32,7 @@ from tensorflow.python.keras import backend
 from tensorflow.python.keras import callbacks as cbks
 from tensorflow.python.keras.engine import training_utils
 from tensorflow.python.keras.utils import generic_utils
+from tensorflow.python.ops import math_ops
 from tensorflow.python.platform import tf_logging as logging
 
 
@@ -67,7 +68,8 @@ def _model_loss(model, inputs, targets, sample_weights=None, training=False):
 
   Arguments:
       model: The model on which metrics are being calculated.
-      inputs: List of input arrays.
+      inputs: Either a dictionary of inputs to the model or a list of input
+        arrays.
       targets: List of target arrays.
       sample_weights: Optional list of sample weight arrays.
       training: Whether the model should be run in inference or training mode.
@@ -82,7 +84,7 @@ def _model_loss(model, inputs, targets, sample_weights=None, training=False):
   kwargs = {}
   if model._expects_training_arg:
     kwargs['training'] = training
-  if len(inputs) == 1:
+  if len(inputs) == 1 and not isinstance(inputs, dict):
     inputs = inputs[0]
 
   if model._compute_output_and_mask_jointly:
@@ -125,13 +127,10 @@ def _model_loss(model, inputs, targets, sample_weights=None, training=False):
 
     total_loss = backend.mean(total_loss)
     # Add regularization losses
-    custom_losses = []
-    for layer in model.layers:
-      if layer.losses:
-        custom_losses += layer.losses
-
+    custom_losses = model.losses
     if custom_losses:
-      total_loss += sum(custom_losses)
+      total_loss += math_ops.add_n(custom_losses)
+    model._clear_losses()
 
   return outs, total_loss, loss_metrics, masks
 
@@ -185,7 +184,7 @@ def iterator_fit_loop(model,
   # make sure either x,y or x,y,sample_weights is provided
   if (not isinstance(inputs.output_shapes, (list, tuple)) or
       len(inputs.output_shapes) not in (2, 3)):
-    raise ValueError('Please provide either inputs and targets'
+    raise ValueError('Please provide either inputs and targets '
                      'or inputs, targets, and sample_weights')
 
   for step_index in range(steps_per_epoch):
@@ -369,6 +368,8 @@ def iterator_test_loop(model, inputs, steps, verbose=0):
     # Get current step size.
     if isinstance(x, list):
       step_size = x[0].get_shape().as_list()[0]
+    elif isinstance(x, dict):
+      step_size = list(x.values())[0].get_shape().as_list()[0]
     else:
       step_size = x.get_shape().as_list()[0]
 
@@ -417,11 +418,12 @@ def iterator_predict_loop(model, inputs, steps, verbose=0):
   """
   assert isinstance(inputs, iterator_ops.EagerIterator)
   if not isinstance(inputs.output_shapes,
-                    (list, tuple)) or len(inputs.output_shapes) > 2:
+                    (list, tuple)) or len(inputs.output_shapes) > 3:
     raise ValueError(
-        'Please provide data as a list or tuple of 1 or 2 elements '
-        ' - input or input and target pair. Received %s. We do not use the '
-        '`target` value here.' % inputs.output_shapes)
+        'Please provide data as a list or tuple of 1, 2, or 3 elements '
+        ' - `(input)`, or `(input, target)`, or `(input, target,'
+        'sample_weights)`. Received %s. We do not use the `target` or'
+        '`sample_weights` value here.' % inputs.output_shapes)
   outs = []
   if verbose == 1:
     progbar = generic_utils.Progbar(target=steps)
@@ -444,10 +446,13 @@ def iterator_predict_loop(model, inputs, steps, verbose=0):
     x, _, _ = model._standardize_user_data(x)
     x = training_utils.cast_if_floating_dtype(x)
 
+    if isinstance(x, list) and len(x) == 1:
+      x = x[0]
+
     if model._expects_training_arg:
-      batch_outs = model.call(x[0] if len(x) == 1 else x, training=False)
+      batch_outs = model.call(x, training=False)
     else:
-      batch_outs = model.call(x[0] if len(x) == 1 else x)
+      batch_outs = model.call(x)
     if not isinstance(batch_outs, list):
       batch_outs = [batch_outs]
 
@@ -732,7 +737,8 @@ def test_loop(model, inputs, targets,
       y=targets,
       sample_weights=sample_weights,
       batch_size=batch_size,
-      steps_per_epoch=steps)
+      steps_per_epoch=steps,
+      is_validation=True)
   with backend.learning_phase_scope(0):
     return iterator_test_loop(model, inputs, steps, verbose=verbose)
 

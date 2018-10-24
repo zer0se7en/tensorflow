@@ -49,7 +49,8 @@ class SingleLossStepTest(test.TestCase, parameterized.TestCase):
       if context.executing_eagerly():
         run_step = single_loss_step
       else:
-        with self.test_session() as sess:
+        with self.cached_session() as sess:
+          sess.run(single_loss_step._iterator.initializer)
           run_step = sess.make_callable(single_loss_step())
       self.evaluate(variables.global_variables_initializer())
 

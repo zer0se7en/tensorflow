@@ -24,12 +24,10 @@ namespace xla {
 namespace {
 
 // Pass which strips control dependencies from all instructions in the module.
-class ControlDepRemover : public HloPassInterface {
+class ControlDepRemover : public HloModulePass {
  public:
   ControlDepRemover() = default;
-  tensorflow::StringPiece name() const override {
-    return "control-dep-remover";
-  }
+  absl::string_view name() const override { return "control-dep-remover"; }
 
   StatusOr<bool> Run(HloModule* module) override {
     bool changed = false;

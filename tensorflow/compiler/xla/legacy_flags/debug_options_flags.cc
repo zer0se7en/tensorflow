@@ -17,9 +17,9 @@ limitations under the License.
 
 #include <mutex>  // NOLINT(build/c++11): only using std::call_once, not mutex.
 #include <vector>
+#include "absl/strings/str_split.h"
 #include "tensorflow/compiler/xla/legacy_flags/debug_options_parsers.h"
 #include "tensorflow/compiler/xla/legacy_flags/parse_flags_from_env.h"
-#include "tensorflow/core/lib/strings/str_util.h"
 
 namespace xla {
 namespace legacy_flags {
@@ -57,6 +57,8 @@ void SetDebugOptionsDefaults(DebugOptions* flags) {
   // regression.
   flags->set_xla_cpu_enable_fast_math(true);
   flags->set_xla_gpu_enable_fast_math(true);
+
+  flags->set_xla_force_host_platform_device_count(1);
 }
 
 // Allocates flag_values and flag_objects; this function must not be called more
@@ -87,7 +89,7 @@ void AllocateFlags() {
   // Custom "sub-parser" lambda for xla_disable_hlo_passes.
   auto setter_for_xla_disable_hlo_passes = [](string comma_separated_values) {
     std::vector<string> disabled_passes =
-        tensorflow::str_util::Split(comma_separated_values, ',');
+        absl::StrSplit(comma_separated_values, ',');
     for (const auto& passname : disabled_passes) {
       flag_values->add_xla_disable_hlo_passes(passname);
     }
@@ -323,6 +325,17 @@ void AllocateFlags() {
           flag_values->xla_gpu_crash_on_verification_failures(),
           "Crashes the program on extra verification failures, e.g. cuDNN "
           "cross checking failures"),
+      tensorflow::Flag(
+          "xla_force_host_platform_device_count",
+          int32_setter_for(
+              &DebugOptions::set_xla_force_host_platform_device_count),
+          flag_values->xla_force_host_platform_device_count(),
+          "Force the host platform to pretend that there are these many "
+          "host \"devices\". All of these host devices are backed by the same"
+          "threadpool.  Setting this to anything other than 1 can increase "
+          "overhead from context switching but we let the user override this "
+          "behavior to help run tests on the host that run models in parallel "
+          "across multiple devices."),
   });
   ParseFlagsFromEnv(*flag_objects);
 }

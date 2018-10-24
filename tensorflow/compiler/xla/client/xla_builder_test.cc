@@ -264,6 +264,26 @@ TEST_F(XlaBuilderTest, BinopHasInDimAndDegenerateBroadcast) {
                             op::Broadcast(op::Reshape(op::Parameter(1)))));
 }
 
+TEST_F(XlaBuilderTest, BroadcastInDim) {
+  XlaBuilder b(TestName());
+  auto x = Parameter(&b, 0, ShapeUtil::MakeShape(F32, {2, 3}), "x");
+  BroadcastInDim(x, ShapeUtil::MakeShape(F32, {2, 4, 3}),
+                 /*broadcast_dimensions=*/{0, 2});
+  TF_ASSERT_OK_AND_ASSIGN(auto module, BuildHloModule(&b));
+  auto root = module->entry_computation()->root_instruction();
+  EXPECT_THAT(root, op::Broadcast());
+}
+
+TEST_F(XlaBuilderTest, BroadcastInDimWithDegeneratedDim) {
+  XlaBuilder b(TestName());
+  auto x = Parameter(&b, 0, ShapeUtil::MakeShape(F32, {2, 1, 4}), "x");
+  BroadcastInDim(x, ShapeUtil::MakeShape(F32, {2, 3, 4}),
+                 /*broadcast_dimensions=*/{0, 1, 2});
+  TF_ASSERT_OK_AND_ASSIGN(auto module, BuildHloModule(&b));
+  EXPECT_THAT(module->entry_computation()->root_instruction(),
+              op::Broadcast(op::Reshape(op::Broadcast())));
+}
+
 TEST_F(XlaBuilderTest, OperandFromWrongBuilder) {
   XlaBuilder b1("b1");
   auto p0 = Parameter(&b1, 0, ShapeUtil::MakeShape(F32, {}), "p0");
@@ -318,6 +338,15 @@ TEST_F(XlaBuilderTest, AllToAll) {
   EXPECT_EQ(root->operand(0)->operand(0)->opcode(), HloOpcode::kAllToAll);
   EXPECT_TRUE(
       ShapeUtil::Equal(root->shape(), ShapeUtil::MakeShape(F32, {8, 8})));
+}
+
+TEST_F(XlaBuilderTest, CollectivePermute) {
+  XlaBuilder b(TestName());
+  auto x = Parameter(&b, 0, ShapeUtil::MakeShape(F32, {5, 7}), "x");
+  CollectivePermute(x, {{0, 1}, {1, 2}, {2, 3}});
+  TF_ASSERT_OK_AND_ASSIGN(auto module, BuildHloModule(&b));
+  auto root = module->entry_computation()->root_instruction();
+  EXPECT_EQ(root->opcode(), HloOpcode::kCollectivePermute);
 }
 
 TEST_F(XlaBuilderTest, ReportError) {

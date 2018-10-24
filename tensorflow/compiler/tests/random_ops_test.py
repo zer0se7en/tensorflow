@@ -35,11 +35,12 @@ class RandomOpsTest(xla_test.XLATestCase):
   """Test cases for random-number generating operators."""
 
   def _random_types(self):
-    return set(self.numeric_types) - set(self.complex_types)
+    return set(self.numeric_types) - set(
+        self.complex_types) - {np.uint8, np.int8}
 
   def _testRngIsNotConstant(self, rng, dtype):
     # Tests that 'rng' does not always return the same value.
-    with self.test_session() as sess:
+    with self.cached_session() as sess:
       with self.test_scope():
         x = rng(dtype)
 
@@ -68,9 +69,8 @@ class RandomOpsTest(xla_test.XLATestCase):
     def rng(dtype):
       return random_ops.random_normal(shape=[2], dtype=dtype)
 
-    # TODO(b/34339814): implement inverse erf support for non-F32 types.
-    dtype = dtypes.float32
-    self._testRngIsNotConstant(rng, dtype)
+    for dtype in self._random_types() & self.float_types:
+      self._testRngIsNotConstant(rng, dtype)
 
   def testRandomUniformIsInRange(self):
     for dtype in self._random_types():
@@ -79,7 +79,7 @@ class RandomOpsTest(xla_test.XLATestCase):
       if (self.device in ["XLA_GPU", "XLA_CPU"
                          ]) and (dtype in [dtypes.bfloat16, dtypes.half]):
         continue
-      with self.test_session() as sess:
+      with self.cached_session() as sess:
         with self.test_scope():
           x = random_ops.random_uniform(
               shape=[1000], dtype=dtype, minval=-2, maxval=33)
@@ -92,14 +92,14 @@ class RandomOpsTest(xla_test.XLATestCase):
     def rng(dtype):
       return random_ops.truncated_normal(shape=[2], dtype=dtype)
 
-    # TODO(b/34339814): implement inverse erf support for non-F32 types.
-    self._testRngIsNotConstant(rng, dtypes.float32)
+    for dtype in self._random_types() & self.float_types:
+      self._testRngIsNotConstant(rng, dtype)
 
   def testTruncatedNormalIsInRange(self):
     count = 10000000
-    # TODO(b/34339814): implement inverse erf support for non-F32 types.
-    for dtype in [dtypes.float32]:
-      with self.test_session() as sess:
+    # TODO(b/34339814): make this test work with 16 bit float types.
+    for dtype in self._random_types() & {dtypes.float32, dtypes.float64}:
+      with self.cached_session() as sess:
         with self.test_scope():
           x = random_ops.truncated_normal(shape=[count], dtype=dtype)
         y = sess.run(x)
@@ -144,10 +144,7 @@ class RandomOpsTest(xla_test.XLATestCase):
         self.assertAllClose(actual_variance, expected_variance, rtol=2*1e-3)
 
   def testShuffle1d(self):
-    # TODO(b/26783907): this test requires the CPU backend to implement sort.
-    if self.device in ["XLA_CPU"]:
-      return
-    with self.test_session() as sess:
+    with self.cached_session() as sess:
       with self.test_scope():
         x = math_ops.range(1 << 16)
         shuffle = random_ops.random_shuffle(x)
@@ -158,7 +155,7 @@ class RandomOpsTest(xla_test.XLATestCase):
       self.assertAllEqual(set(result), set(expected))
 
   def testShuffle2d(self):
-    with self.test_session() as sess:
+    with self.cached_session() as sess:
       with self.test_scope():
         x = array_ops.diag(math_ops.range(20))
         shuffle = random_ops.random_shuffle(x)

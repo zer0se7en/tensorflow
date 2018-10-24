@@ -33,9 +33,10 @@ limitations under the License.
 #include "tensorflow/core/protobuf/rewriter_config.pb.h"
 
 namespace tensorflow {
+namespace data {
 namespace {
 
-// See documentation in ../ops/dataset_ops.cc for a high-level
+// See documentation in ../../ops/dataset_ops.cc for a high-level
 // description of the following op.
 class OptimizeDatasetOp : public UnaryDatasetOpKernel {
  public:
@@ -92,24 +93,45 @@ class OptimizeDatasetOp : public UnaryDatasetOpKernel {
       DatasetGraphDefBuilder db(&b);
       Node* input_node = nullptr;
       SerializationContext::Params params;
+      std::vector<std::pair<string, Tensor>> input_list;
+      params.allow_stateful_functions = true;
       params.flib_def = ctx->function_library()->GetFunctionLibraryDefinition();
+      params.input_list = &input_list;
       SerializationContext serialization_ctx(params);
       TF_RETURN_IF_ERROR(
           db.AddInputDataset(&serialization_ctx, input_, &input_node));
       string output_node = input_node->name();
+
       GraphDef graph_def;
       TF_RETURN_IF_ERROR(b.ToGraphDef(&graph_def));
       VLOG(3) << "Before optimization: " << graph_def.DebugString();
+
       TF_RETURN_IF_ERROR(ApplyOptimizations(ctx, &graph_def, &output_node));
       VLOG(3) << "After optimization: " << graph_def.DebugString();
-      flib_def_.reset(new FunctionLibraryDefinition(OpRegistry::Global(),
-                                                    graph_def.library()));
+
+      // Instantiate the optimized input pipeline by running the optimized graph
+      // using the optimized function library.
+      TF_RETURN_IF_ERROR(
+          ctx->function_library()->Clone(&flib_def_, &pflr_, &lib_));
+
+      // Some functions may have been modified without having their names
+      // changed (for example, nested dataset graphs from FlatMap or
+      // Interleave). To avoid name conflicts, we remove these functions from
+      // flib_def_ before adding the optimized function library.
+      for (const FunctionDef& fd : graph_def.library().function()) {
+        if (flib_def_->Find(fd.signature().name()) != nullptr) {
+          TF_RETURN_IF_ERROR(flib_def_->RemoveFunction(fd.signature().name()));
+        }
+      }
+      TF_RETURN_IF_ERROR(flib_def_->AddLibrary(graph_def.library()));
+
       Graph graph(OpRegistry::Global());
       TF_RETURN_IF_ERROR(ImportGraphDef({}, graph_def, &graph, nullptr));
       std::vector<Tensor> outputs;
       GraphRunner graph_runner(ctx->function_library()->device());
-      TF_RETURN_IF_ERROR(graph_runner.Run(&graph, ctx->function_library(), {},
-                                          {output_node}, &outputs));
+
+      TF_RETURN_IF_ERROR(
+          graph_runner.Run(&graph, lib_, input_list, {output_node}, &outputs));
       TF_RETURN_IF_ERROR(
           GetDatasetFromVariantTensor(outputs[0], &optimized_input_));
       optimized_input_->Ref();
@@ -142,22 +164,19 @@ class OptimizeDatasetOp : public UnaryDatasetOpKernel {
           : DatasetIterator<Dataset>(params) {}
 
       Status Initialize(IteratorContext* ctx) override {
-        return dataset()->optimized_input_->MakeIterator(ctx, prefix(),
-                                                         &input_impl_);
+        IteratorContext::Params params = ctx->params();
+        params.lib = dataset()->lib_;
+        return dataset()->optimized_input_->MakeIterator(
+            IteratorContext(params), prefix(), &input_impl_);
       }
 
       Status GetNextInternal(IteratorContext* ctx,
                              std::vector<Tensor>* out_tensors,
                              bool* end_of_sequence) override {
-        IteratorContext::Params params;
-        params.env = ctx->env();
-        params.runner = *(ctx->runner());
-        params.stats_aggregator_getter = ctx->stats_aggregator_getter();
-        params.lib = ctx->lib();
-        params.function_library = dataset()->flib_def_;
-        params.allocator_getter = ctx->allocator_getter();
-        IteratorContext iter_ctx(params);
-        return input_impl_->GetNext(&iter_ctx, out_tensors, end_of_sequence);
+        IteratorContext::Params params = ctx->params();
+        params.lib = dataset()->lib_;
+        return input_impl_->GetNext(IteratorContext(params), out_tensors,
+                                    end_of_sequence);
       }
 
      protected:
@@ -205,6 +224,17 @@ class OptimizeDatasetOp : public UnaryDatasetOpKernel {
       // moment (e.g. because we have no cost model for dataset ops).
       if (optimizations_.empty()) {
         rewriter_config.add_optimizers("non-existent");
+      } else {
+        // If we apply custom dataset optimizers, explicitly trigger a subset of
+        // standard grappler optimizations to further optimize modified dataset
+        // graphs (e.g. performing constant folding on merged functions,
+        // removing unused graph nodes)
+        // TODO(b/118175421): This should be part of the tf.data optimization
+        // pass manager.
+        for (const auto& optimizer : {"pruning", "function", "constfold",
+                                      "shape", "arithmetic", "dependency"}) {
+          rewriter_config.add_optimizers(optimizer);
+        }
       }
       tensorflow::grappler::ItemConfig item_config;
       item_config.apply_optimizations = true;
@@ -236,7 +266,9 @@ class OptimizeDatasetOp : public UnaryDatasetOpKernel {
     }
 
     DatasetBase* optimized_input_;
-    std::shared_ptr<FunctionLibraryDefinition> flib_def_;
+    FunctionLibraryRuntime* lib_ = nullptr;
+    std::unique_ptr<ProcessFunctionLibraryRuntime> pflr_ = nullptr;
+    std::unique_ptr<FunctionLibraryDefinition> flib_def_ = nullptr;
     const DatasetBase* input_;
     const std::vector<string> optimizations_;
     const DataTypeVector output_types_;
@@ -252,4 +284,5 @@ REGISTER_KERNEL_BUILDER(Name("OptimizeDataset").Device(DEVICE_CPU),
                         OptimizeDatasetOp);
 
 }  // namespace
+}  // namespace data
 }  // namespace tensorflow

@@ -18,6 +18,7 @@ limitations under the License.
 #include <stdlib.h>
 #include <unordered_set>
 
+#include "absl/memory/memory.h"
 #include "tensorflow/compiler/jit/defs.h"
 #include "tensorflow/compiler/jit/xla_compile_on_demand_op.h"
 #include "tensorflow/compiler/jit/xla_device_context.h"
@@ -101,7 +102,7 @@ XlaDeviceAllocator* XlaDeviceAllocatorState::GetOrCreateXlaDeviceAllocator(
   }
 
   std::unique_ptr<XlaDeviceAllocator> alloc =
-      xla::MakeUnique<XlaDeviceAllocator>();
+      absl::make_unique<XlaDeviceAllocator>();
   XlaDeviceAllocator* alloc_ptr = alloc.get();
   state.allocators_[{backend, device_ordinal}] = std::move(alloc);
   return alloc_ptr;
@@ -124,41 +125,16 @@ Status DefaultPaddedShapeFn(const Tensor& tensor, xla::Shape* shape) {
   return Status::OK();
 }
 
-}  // namespace
-
-/* static */ Status XlaDevice::Create(
-    const string& platform_name, const string& device_name, int device_ordinal,
-    const string& jit_device_name, const SessionOptions& options,
-    const string& name_prefix,
-    const XlaOpRegistry::DeviceRegistration& registration,
-    bool transfer_as_literal, bool use_multiple_streams,
-    const XlaCompiler::ShapeRepresentationFn& shape_representation_fn,
-    const PaddedShapeFn& padded_shape_fn, std::unique_ptr<XlaDevice>* device) {
-  VLOG(1) << "XlaDevice::Create " << platform_name << " " << device_name << ":"
-          << device_ordinal;
-
-  // These are no-ops if they have already been done previously for
-  // this device_name/compilation_device_name pair.
-  XlaOpRegistry::RegisterCompilationDevice(device_name, registration);
-
-  auto platform = se::MultiPlatformManager::PlatformWithName(platform_name);
-  if (!platform.ok()) {
-    return platform.status();
-  }
-
-  const DeviceAttributes attrs = Device::BuildDeviceAttributes(
-      strings::StrCat(name_prefix, "/device:", device_name, ":",
-                      device_ordinal),
+static DeviceAttributes BuildXlaDeviceAttributes(const string& name_prefix,
+                                                 const string& device_name,
+                                                 int device_ordinal) {
+  return Device::BuildDeviceAttributes(
+      absl::StrCat(name_prefix, "/device:", device_name, ":", device_ordinal),
       DeviceType(device_name), Bytes(16ULL << 30), DeviceLocality(),
-      strings::StrCat("device: ", device_name, " device"));
-
-  device->reset(
-      new XlaDevice(options, attrs, device_ordinal, DeviceType(jit_device_name),
-                    platform.ValueOrDie(), transfer_as_literal,
-                    use_multiple_streams, shape_representation_fn,
-                    padded_shape_fn ? padded_shape_fn : DefaultPaddedShapeFn));
-  return Status::OK();
+      absl::StrCat("device: ", device_name, " device"));
 }
+
+}  // namespace
 
 XlaDevice::Metadata::Metadata(
     int device_ordinal, se::Platform* platform, const DeviceType& device_type,
@@ -184,14 +160,13 @@ const DeviceType& XlaDevice::Metadata::jit_device_type() const {
   return device_type_;
 }
 
-/* static */ Status XlaDevice::GetMetadata(OpKernelContext* ctx,
-                                           const Metadata** metadata) {
+/*static*/ Status XlaDevice::GetMetadataFromDevice(
+    DeviceBase* device, const XlaDevice::Metadata** metadata) {
   *metadata = nullptr;
-  XlaDevice* xla_device =
-      dynamic_cast<XlaDevice*>(ctx->device()->UnderlyingDevice());
+  XlaDevice* xla_device = dynamic_cast<XlaDevice*>(device->UnderlyingDevice());
   if (xla_device == nullptr) {
     return errors::Internal(
-        "Cannot get XLA metadata from non-XLA device \"", ctx->device()->name(),
+        "Cannot get XLA metadata from non-XLA device \"", device->name(),
         "\". GetMetadata must only be called on an XLA device. Either an "
         "internal bug has been triggered, or an XLA-specific op has been "
         "placed on the wrong device.");
@@ -200,24 +175,37 @@ const DeviceType& XlaDevice::Metadata::jit_device_type() const {
   return Status::OK();
 }
 
-XlaDevice::XlaDevice(
-    const SessionOptions& options, const DeviceAttributes& attrs,
-    int device_ordinal, const DeviceType& jit_device_name,
-    se::Platform* platform, bool transfer_as_literal, bool use_multiple_streams,
-    const XlaCompiler::ShapeRepresentationFn& shape_representation_fn,
-    const PaddedShapeFn& padded_shape_fn)
-    : LocalDevice(options, attrs),
-      xla_metadata_(device_ordinal, platform, jit_device_name,
-                    shape_representation_fn, padded_shape_fn,
-                    use_multiple_streams),
-      device_ordinal_(device_ordinal),
-      jit_device_name_(jit_device_name),
-      platform_(platform),
-      use_multiple_streams_(use_multiple_streams),
-      transfer_as_literal_(transfer_as_literal),
-      shape_representation_fn_(shape_representation_fn) {
-  VLOG(1) << "Created XLA device " << jit_device_name << " " << this;
-  thread_pool_.reset(new thread::ThreadPool(options.env, "xla_device",
+/* static */ Status XlaDevice::GetMetadata(OpKernelContext* ctx,
+                                           const Metadata** metadata) {
+  return GetMetadataFromDevice(ctx->device(), metadata);
+}
+
+/* static */ Status XlaDevice::GetMetadata(OpKernelConstruction* ctx,
+                                           const Metadata** metadata) {
+  return GetMetadataFromDevice(ctx->device(), metadata);
+}
+
+XlaDevice::XlaDevice(const SessionOptions& session_options,
+                     const Options& options)
+    : LocalDevice(session_options,
+                  BuildXlaDeviceAttributes(options.device_name_prefix,
+                                           options.device_name,
+                                           options.device_ordinal)),
+      xla_metadata_(options.device_ordinal, options.platform,
+                    DeviceType(options.compilation_device_name),
+                    options.shape_representation_fn,
+                    options.padded_shape_fn ? options.padded_shape_fn
+                                            : DefaultPaddedShapeFn,
+                    options.use_multiple_streams),
+      device_ordinal_(options.device_ordinal),
+      jit_device_name_(options.compilation_device_name),
+      platform_(options.platform),
+      use_multiple_streams_(options.use_multiple_streams),
+      transfer_as_literal_(options.transfer_as_literal),
+      shape_representation_fn_(options.shape_representation_fn) {
+  VLOG(1) << "Created XLA device " << options.compilation_device_name << " "
+          << this;
+  thread_pool_.reset(new thread::ThreadPool(session_options.env, "xla_device",
                                             /*num_threads=*/1));
 }
 
@@ -327,7 +315,7 @@ xla::StatusOr<XlaDeviceContext*> XlaDevice::GetDeviceContextLocked() {
   // to those methods; see the bug for details. Our only saving grace at the
   // moment is that this race doesn't seem to occur in practice.
   if (use_gpu_device_info_) {
-    auto gpu_device_info = MakeUnique<GpuDeviceInfo>();
+    auto gpu_device_info = absl::make_unique<GpuDeviceInfo>();
     gpu_device_info->stream = stream_.get();
     gpu_device_info->default_context = device_context_;
     set_tensorflow_gpu_device_info(gpu_device_info.get());
@@ -364,10 +352,6 @@ Status XlaDevice::FillContextMap(const Graph* graph,
 void XlaDevice::Compute(OpKernel* op_kernel, OpKernelContext* context) {
   VLOG(2) << "XlaDevice::Compute " << op_kernel->name() << ":"
           << op_kernel->type_string();
-  // When Xprof profiling is off (which is the default), constructing the
-  // activity is simple enough that its overhead is negligible.
-  tracing::ScopedActivity activity(op_kernel->name(), op_kernel->type_string(),
-                                   op_kernel->IsExpensive());
   op_kernel->Compute(context);
 }
 
@@ -427,6 +411,16 @@ Status XlaDevice::MakeTensorFromProto(const TensorProto& tensor_proto,
   }
   VLOG(2) << "Allocated tensor at " << DMAHelper::base(tensor);
   return status;
+}
+
+void XlaDevice::SetRequiresSyncOnCompletion(bool sync_on_completion) {
+  mutex_lock lock(mu_);
+  sync_on_completion_ = sync_on_completion;
+}
+
+bool XlaDevice::RequiresSyncOnCompletion() const {
+  mutex_lock lock(mu_);
+  return sync_on_completion_;
 }
 
 XlaDeviceOpRegistrations* RegisterXlaDeviceKernels(const char* device,

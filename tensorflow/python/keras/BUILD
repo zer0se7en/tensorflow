@@ -62,6 +62,7 @@ py_library(
         ":backend",
         ":engine",
         ":layers",
+        "//tensorflow/python/keras/optimizer_v2:optimizer_v2",
         "//tensorflow/python/saved_model",
         "//tensorflow/python:training",
     ],
@@ -102,7 +103,6 @@ py_library(
         "//tensorflow/python:tensor_array_ops",
         "//tensorflow/python:tensor_shape",
         "//tensorflow/python:util",
-        "//tensorflow/python:variable_scope",
         "//tensorflow/python:variables",
     ],
 )
@@ -140,6 +140,7 @@ py_library(
         ":backend",
         "//tensorflow/python/data",
         "//tensorflow/python/training/checkpointable:data_structures",
+        "//tensorflow/tools/docs:doc_controls",
         "@six_archive//:six",
     ],
 )
@@ -337,11 +338,6 @@ py_test(
     size = "large",
     srcs = ["layers/convolutional_test.py"],
     srcs_version = "PY2AND3",
-    tags = [
-        "manual",
-        "noasan",  # times out b/63678675
-        "notsan",
-    ],
     deps = [
         ":keras",
         "//tensorflow/python:client_testlib",
@@ -360,7 +356,10 @@ cuda_py_test(
         "//tensorflow/python:client_testlib",
     ],
     shard_count = 2,
-    tags = ["no_windows_gpu"],
+    tags = [
+        "no_oss",  # b/117834718
+        "no_windows_gpu",
+    ],
 )
 
 py_test(
@@ -386,12 +385,11 @@ py_test(
     ],
 )
 
-py_test(
+cuda_py_test(
     name = "embeddings_test",
-    size = "small",
+    size = "medium",
     srcs = ["layers/embeddings_test.py"],
-    srcs_version = "PY2AND3",
-    deps = [
+    additional_deps = [
         ":keras",
         "//tensorflow/python:client_testlib",
     ],
@@ -688,13 +686,40 @@ py_test(
 
 py_test(
     name = "training_test",
-    size = "large",
+    size = "enormous",
     srcs = ["engine/training_test.py"],
     srcs_version = "PY2AND3",
     tags = ["notsan"],
     deps = [
         ":keras",
         "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "training_generator_test",
+    size = "enormous",
+    srcs = ["engine/training_generator_test.py"],
+    srcs_version = "PY2AND3",
+    tags = ["notsan"],
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//third_party/py/numpy",
+    ],
+)
+
+py_test(
+    name = "feature_columns_integration_test",
+    size = "small",
+    srcs = ["engine/feature_columns_integration_test.py"],
+    srcs_version = "PY2AND3",
+    tags = ["notsan"],
+    deps = [
+        ":keras",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python/feature_column:feature_column_py",
         "//third_party/py/numpy",
     ],
 )

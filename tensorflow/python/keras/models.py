@@ -20,6 +20,7 @@ from __future__ import division
 from __future__ import print_function
 
 from tensorflow.python.keras import backend as K
+from tensorflow.python.keras import metrics as metrics_module
 from tensorflow.python.keras import optimizers
 from tensorflow.python.keras.engine import saving
 from tensorflow.python.keras.engine import sequential
@@ -30,9 +31,9 @@ from tensorflow.python.keras.engine.input_layer import InputLayer
 from tensorflow.python.keras.engine.network import Network
 from tensorflow.python.keras.utils import generic_utils
 from tensorflow.python.keras.utils.generic_utils import CustomObjectScope
-from tensorflow.python.training import training_util
 from tensorflow.python.training.checkpointable import base as checkpointable
 from tensorflow.python.training.checkpointable import data_structures
+from tensorflow.python.util.tf_export import tf_export
 
 # API entries importable from `keras.models`:
 Model = training.Model  # pylint: disable=invalid-name
@@ -95,6 +96,8 @@ def _clone_functional_model(model, input_tensors=None):
   else:
     # Make sure that all input tensors come from a Keras layer.
     # If tensor comes from an input layer: cache the input layer.
+    if isinstance(input_tensors, tuple):
+      input_tensors = list(input_tensors)
     input_tensors = generic_utils.to_list(input_tensors)
     input_tensors_ = []
     for i, x in enumerate(input_tensors):
@@ -211,6 +214,9 @@ def _clone_sequential_model(model, input_tensors=None):
       raise ValueError('To clone a `Sequential` model, we expect '
                        ' at most one tensor '
                        'as part of `input_tensors`.')
+
+    if isinstance(input_tensors, tuple):
+      input_tensors = list(input_tensors)
     x = generic_utils.to_list(input_tensors)[0]
     if K.is_keras_tensor(x):
       origin_layer = x._keras_history[0]
@@ -226,6 +232,7 @@ def _clone_sequential_model(model, input_tensors=None):
     return Sequential(layers=[input_layer] + layers, name=model.name)
 
 
+@tf_export('keras.models.clone_model')
 def clone_model(model, input_tensors=None):
   """Clone any `Model` instance.
 
@@ -236,7 +243,7 @@ def clone_model(model, input_tensors=None):
   Arguments:
       model: Instance of `Model`
           (could be a functional model or a Sequential model).
-      input_tensors: optional list of input tensors
+      input_tensors: optional list of input tensors or InputLayer objects
           to build the model upon. If not provided,
           placeholders will be created.
 
@@ -289,7 +296,9 @@ def _in_place_subclassed_model_reset(model):
     if isinstance(value, Layer):
       attributes_cache[name] = value
       assert value in model._layers
-    elif isinstance(value, (list, tuple)) and name not in ('layers', '_layers'):
+    elif isinstance(
+        value, (list, tuple)) and name not in ('layers', '_layers',
+                                               'stateful_metric_functions'):
       # Handle case: list/tuple of layers (also tracked by the Network API).
       if value and all(isinstance(val, Layer) for val in value):
         raise ValueError('We do not support the use of list-of-layers '
@@ -392,10 +401,14 @@ def in_place_subclassed_model_state_restoration(model):
 
 def clone_and_build_model(
     model, input_tensors=None, target_tensors=None, custom_objects=None,
-    compile_clone=True, in_place_reset=False):
+    compile_clone=True, in_place_reset=False, optimizer_iterations=None):
   """Clone a `Model` and build/compile it with the same settings used before.
 
-  This function should be run in the same graph as the model.
+  This function can be be run in the same graph or in a separate graph from the
+  model. When using a separate graph, `in_place_reset` must be `False`.
+
+  Note that, currently, the clone produced from this function may not work with
+  TPU DistributionStrategy. Try at your own risk.
 
   Args:
     model: `tf.keras.Model` object. Can be Functional, Sequential, or
@@ -412,20 +425,39 @@ def clone_and_build_model(
       this argument must be set to `True` (default `False`). To restore the
       original model, use the function
       `in_place_subclassed_model_state_restoration(model)`.
+    optimizer_iterations: An iterations variable that will be incremented by the
+      optimizer if the clone is compiled. This argument is used when a Keras
+      model is cloned into an Estimator model function, because Estimators
+      create their own global step variable.
 
   Returns:
     Clone of the model.
 
   Raises:
-    ValueError: if trying to clone a subclassed model, and `in_place_reset` is
-      set to False.
+    ValueError: Cloning fails in the following cases
+      - cloning a subclassed model with `in_place_reset` set to False.
+      - compiling the clone when the original model has not been compiled.
   """
-  if model._is_graph_network:
+  if compile_clone and not model.optimizer:
+    raise ValueError(
+        'Error when cloning model: compile_clone was set to True, but the '
+        'original model has not been compiled.')
+
+  if model._is_graph_network or isinstance(model, Sequential):
     if custom_objects:
       with CustomObjectScope(custom_objects):
         clone = clone_model(model, input_tensors=input_tensors)
     else:
       clone = clone_model(model, input_tensors=input_tensors)
+
+    if all([isinstance(clone, Sequential),
+            not clone._is_graph_network,
+            model.built]):
+      # Set model inputs to build the model and add input/output properties.
+      # TODO(kathywu): Add multiple placeholders to handle edge case where
+      # sequential model has multiple inputs.
+      clone._set_inputs(
+          K.placeholder(model._build_input_shape, dtype=model.inputs[0].dtype))
   else:
     if not in_place_reset:
       raise ValueError(
@@ -438,27 +470,28 @@ def clone_and_build_model(
     clone = model
     _in_place_subclassed_model_reset(clone)
     if input_tensors is not None:
+      if isinstance(input_tensors, (list, tuple)) and len(input_tensors) == 1:
+        input_tensors = input_tensors[0]
       clone._set_inputs(input_tensors)
 
-  # Compile/Build model
-  if not compile_clone:
-    if isinstance(clone, Sequential):
-      clone.build()
-  elif model.optimizer:
+  if compile_clone and model.optimizer:
     if isinstance(model.optimizer, optimizers.TFOptimizer):
-      optimizer = model.optimizer
+      optimizer = optimizers.TFOptimizer(
+          model.optimizer.optimizer, optimizer_iterations)
+      K.track_tf_optimizer(optimizer)
     else:
       optimizer_config = model.optimizer.get_config()
       optimizer = model.optimizer.__class__.from_config(optimizer_config)
-    optimizer.iterations = training_util.get_or_create_global_step()
+      if optimizer_iterations is not None:
+        optimizer.iterations = optimizer_iterations
 
     clone.compile(
         optimizer,
         model.loss,
-        metrics=model.metrics,
+        metrics=metrics_module.clone_metrics(model.metrics),
         loss_weights=model.loss_weights,
         sample_weight_mode=model.sample_weight_mode,
-        weighted_metrics=model.weighted_metrics,
+        weighted_metrics=metrics_module.clone_metrics(model.weighted_metrics),
         target_tensors=target_tensors)
 
   return clone

@@ -14,17 +14,17 @@ limitations under the License.
 ==============================================================================*/
 
 #include "tensorflow/compiler/xla/service/while_loop_simplifier.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/container/flat_hash_set.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
+#include "absl/types/optional.h"
 #include "tensorflow/compiler/xla/service/call_inliner.h"
 #include "tensorflow/compiler/xla/service/while_loop_analysis.h"
-#include "tensorflow/core/lib/gtl/flatmap.h"
-#include "tensorflow/core/lib/gtl/optional.h"
-#include "tensorflow/core/lib/strings/str_util.h"
-#include "tensorflow/core/lib/strings/strcat.h"
 
 namespace xla {
 
-using tensorflow::gtl::nullopt;
-using tensorflow::gtl::optional;
+using absl::optional;
 
 // Determines whether the given instruction is a send/recv node, or has a
 // subcomputation which contains a send/recv node.
@@ -115,7 +115,7 @@ static StatusOr<bool> TryRemoveDeadWhileParams(HloInstruction* while_op) {
     return false;
   }
 
-  tensorflow::gtl::FlatSet<int64> used_tuple_indices;
+  absl::flat_hash_set<int64> used_tuple_indices;
   for (HloComputation* comp : {while_body, while_cond}) {
     // The HLO verifier ensures that while_input's shape matches while_init's
     // shape, which we verified above is a tuple.
@@ -182,7 +182,7 @@ static StatusOr<bool> TryRemoveDeadWhileParams(HloInstruction* while_op) {
                                           used_tuple_indices.end());
   std::sort(new_to_old_tuple_idx.begin(), new_to_old_tuple_idx.end());
 
-  tensorflow::gtl::FlatMap<int64, int64> old_to_new_tuple_idx;
+  absl::flat_hash_map<int64, int64> old_to_new_tuple_idx;
   for (int64 new_idx = 0; new_idx < new_to_old_tuple_idx.size(); ++new_idx) {
     int64 old_idx = new_to_old_tuple_idx[new_idx];
     old_to_new_tuple_idx[old_idx] = new_idx;
@@ -237,12 +237,11 @@ static StatusOr<bool> TryRemoveDeadWhileParams(HloInstruction* while_op) {
             << "Instruction " << user->ToString(print_no_metadata)
             << " should be unused (except by root of while body), but has "
                "users: {"
-            << tensorflow::str_util::Join(
-                   user->users(), ", ",
-                   [&](string* out, const HloInstruction* instr) {
-                     tensorflow::strings::StrAppend(
-                         out, instr->ToString(print_no_metadata));
-                   })
+            << absl::StrJoin(user->users(), ", ",
+                             [&](string* out, const HloInstruction* instr) {
+                               absl::StrAppend(
+                                   out, instr->ToString(print_no_metadata));
+                             })
             << "}";
 
         replacements.emplace(user, nullptr);
@@ -254,7 +253,7 @@ static StatusOr<bool> TryRemoveDeadWhileParams(HloInstruction* while_op) {
   // Create the new while condition, body, and init value.
   std::unique_ptr<HloComputation> new_while_cond =
       while_cond->CloneWithReplacements(
-          make_while_computation_replacements(while_cond));
+          make_while_computation_replacements(while_cond), /*extras=*/{});
 
   std::unordered_map<const HloInstruction*, std::unique_ptr<HloInstruction>>
       while_body_replacements = make_while_computation_replacements(while_body);
@@ -267,7 +266,8 @@ static StatusOr<bool> TryRemoveDeadWhileParams(HloInstruction* while_op) {
   while_body_replacements.emplace(
       while_body_root, HloInstruction::CreateTuple(new_while_body_root_elems));
   std::unique_ptr<HloComputation> new_while_body =
-      while_body->CloneWithReplacements(std::move(while_body_replacements));
+      while_body->CloneWithReplacements(std::move(while_body_replacements),
+                                        /*extras=*/{});
 
   // Add a new while_init instruction that repackages the old while_init
   // instruction's elements.  We rely on the AlgebraicSimplifier and DCE to
@@ -406,7 +406,7 @@ static StatusOr<bool> TryPropagateConstant(HloInstruction* while_op) {
   // build a map from the tuple element index to the constant value. Limit this
   // to scalar constant values because propagating array constants can regress
   // performance by forcing us to copy constants.
-  tensorflow::gtl::FlatMap<int, const HloInstruction*> index_to_constant;
+  absl::flat_hash_map<int, const HloInstruction*> index_to_constant;
   for (int i = 0; i < root_operands.size(); i++) {
     HloInstruction* instr = root_operands[i];
     if (instr->opcode() == HloOpcode::kGetTupleElement &&

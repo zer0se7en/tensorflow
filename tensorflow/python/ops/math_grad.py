@@ -516,6 +516,40 @@ def _Log1pGrad(op, grad):
     return grad * math_ops.reciprocal(1 + x)
 
 
+@ops.RegisterGradient("Xlogy")
+def _XLogyGrad(op, grad):
+  """Returns gradient of xlogy(x, y) with respect to x and y."""
+  x = op.inputs[0]
+  y = op.inputs[1]
+  sx = array_ops.shape(x)
+  sy = array_ops.shape(y)
+  rx, ry = gen_array_ops.broadcast_gradient_args(sx, sy)
+  with ops.control_dependencies([grad]):
+    not_zero_x = math_ops.cast(
+        math_ops.not_equal(x, math_ops.cast(0., dtype=x.dtype)), dtype=x.dtype)
+    partial_x = gen_math_ops.xlogy(not_zero_x, y)
+    partial_y = gen_math_ops.xdivy(x, y)
+    return (array_ops.reshape(math_ops.reduce_sum(partial_x * grad, rx), sx),
+            array_ops.reshape(math_ops.reduce_sum(partial_y * grad, ry), sy))
+
+
+@ops.RegisterGradient("Xdivy")
+def _XDivyGrad(op, grad):
+  """Returns gradient of xdivy(x, y) with respect to x and y."""
+  x = op.inputs[0]
+  y = op.inputs[1]
+  sx = array_ops.shape(x)
+  sy = array_ops.shape(y)
+  rx, ry = gen_array_ops.broadcast_gradient_args(sx, sy)
+  with ops.control_dependencies([grad]):
+    not_zero_x = math_ops.cast(
+        math_ops.not_equal(x, math_ops.cast(0., dtype=x.dtype)), dtype=x.dtype)
+    partial_x = gen_math_ops.xdivy(not_zero_x, y)
+    partial_y = gen_math_ops.xdivy(math_ops.negative(x), y**2)
+    return (array_ops.reshape(math_ops.reduce_sum(partial_x * grad, rx), sx),
+            array_ops.reshape(math_ops.reduce_sum(partial_y * grad, ry), sy))
+
+
 @ops.RegisterGradient("Sinh")
 def _SinhGrad(op, grad):
   """Returns grad * cosh(x)."""
@@ -972,9 +1006,9 @@ def _RealDivGrad(op, grad):
                   grad * math_ops.realdiv(math_ops.realdiv(-x, y), y), ry), sy))
 
 
-@ops.RegisterGradient("UnsafeDiv")
-def _UnsafeDivGrad(op, grad):
-  """UnsafeDiv op gradient."""
+@ops.RegisterGradient("DivNoNan")
+def _DivNoNanGrad(op, grad):
+  """DivNoNan op gradient."""
   x = op.inputs[0]
   y = op.inputs[1]
   sx = array_ops.shape(x)
@@ -983,10 +1017,10 @@ def _UnsafeDivGrad(op, grad):
   x = math_ops.conj(x)
   y = math_ops.conj(y)
   return (array_ops.reshape(
-      math_ops.reduce_sum(math_ops.unsafe_div(grad, y), rx), sx),
+      math_ops.reduce_sum(math_ops.div_no_nan(grad, y), rx), sx),
           array_ops.reshape(
               math_ops.reduce_sum(
-                  grad * math_ops.unsafe_div(math_ops.unsafe_div(-x, y), y),
+                  grad * math_ops.div_no_nan(math_ops.div_no_nan(-x, y), y),
                   ry), sy))
 
 

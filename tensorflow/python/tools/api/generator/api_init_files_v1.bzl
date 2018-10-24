@@ -8,6 +8,7 @@ TENSORFLOW_API_INIT_FILES_V1 = [
     "bitwise/__init__.py",
     "compat/__init__.py",
     "data/__init__.py",
+    "data/experimental/__init__.py",
     "debugging/__init__.py",
     "distributions/__init__.py",
     "dtypes/__init__.py",
@@ -25,6 +26,7 @@ TENSORFLOW_API_INIT_FILES_V1 = [
     "keras/applications/inception_resnet_v2/__init__.py",
     "keras/applications/inception_v3/__init__.py",
     "keras/applications/mobilenet/__init__.py",
+    "keras/applications/mobilenet_v2/__init__.py",
     "keras/applications/nasnet/__init__.py",
     "keras/applications/resnet50/__init__.py",
     "keras/applications/vgg16/__init__.py",
@@ -57,6 +59,7 @@ TENSORFLOW_API_INIT_FILES_V1 = [
     "keras/wrappers/__init__.py",
     "keras/wrappers/scikit_learn/__init__.py",
     "layers/__init__.py",
+    "layers/experimental/__init__.py",
     "linalg/__init__.py",
     "logging/__init__.py",
     "losses/__init__.py",
@@ -68,6 +71,7 @@ TENSORFLOW_API_INIT_FILES_V1 = [
     "profiler/__init__.py",
     "python_io/__init__.py",
     "quantization/__init__.py",
+    "random/__init__.py",
     "resource_loader/__init__.py",
     "strings/__init__.py",
     "saved_model/__init__.py",
@@ -88,5 +92,6 @@ TENSORFLOW_API_INIT_FILES_V1 = [
     "train/__init__.py",
     "train/queue_runner/__init__.py",
     "user_ops/__init__.py",
+    "version/__init__.py",
     # END GENERATED FILES
 ]

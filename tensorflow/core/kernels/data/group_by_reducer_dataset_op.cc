@@ -22,15 +22,15 @@ limitations under the License.
 #include "tensorflow/core/lib/random/random.h"
 
 namespace tensorflow {
+namespace data {
 namespace {
 
-// See documentation in ../ops/dataset_ops.cc for a high-level
+// See documentation in ../../ops/dataset_ops.cc for a high-level
 // description of the following op.
 class GroupByReducerDatasetOp : public UnaryDatasetOpKernel {
  public:
   explicit GroupByReducerDatasetOp(OpKernelConstruction* ctx)
-      : UnaryDatasetOpKernel(ctx),
-        graph_def_version_(ctx->graph_def_version()) {
+      : UnaryDatasetOpKernel(ctx) {
     OP_REQUIRES_OK(ctx, ctx->GetAttr("key_func", &key_func_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("init_func", &init_func_));
     OP_REQUIRES_OK(ctx, ctx->GetAttr("reduce_func", &reduce_func_));
@@ -109,11 +109,10 @@ class GroupByReducerDatasetOp : public UnaryDatasetOpKernel {
     Status AsGraphDefInternal(SerializationContext* ctx,
                               DatasetGraphDefBuilder* b,
                               Node** output) const override {
-      TF_RETURN_IF_ERROR(b->AddFunction(ctx->flib_def(), key_func().name()));
-      TF_RETURN_IF_ERROR(b->AddFunction(ctx->flib_def(), init_func().name()));
-      TF_RETURN_IF_ERROR(b->AddFunction(ctx->flib_def(), reduce_func().name()));
-      TF_RETURN_IF_ERROR(
-          b->AddFunction(ctx->flib_def(), finalize_func().name()));
+      TF_RETURN_IF_ERROR(b->AddFunction(ctx, key_func().name()));
+      TF_RETURN_IF_ERROR(b->AddFunction(ctx, init_func().name()));
+      TF_RETURN_IF_ERROR(b->AddFunction(ctx, reduce_func().name()));
+      TF_RETURN_IF_ERROR(b->AddFunction(ctx, finalize_func().name()));
       Node* input_graph_node = nullptr;
       TF_RETURN_IF_ERROR(b->AddInputDataset(ctx, input_, &input_graph_node));
 
@@ -190,7 +189,14 @@ class GroupByReducerDatasetOp : public UnaryDatasetOpKernel {
           : DatasetIterator<Dataset>(params) {}
 
       Status Initialize(IteratorContext* ctx) override {
-        return dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_);
+        TF_RETURN_IF_ERROR(
+            dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_));
+        TF_RETURN_IF_ERROR(dataset()->captured_key_func_->Instantiate(ctx));
+        TF_RETURN_IF_ERROR(dataset()->captured_init_func_->Instantiate(ctx));
+        TF_RETURN_IF_ERROR(dataset()->captured_reduce_func_->Instantiate(ctx));
+        TF_RETURN_IF_ERROR(
+            dataset()->captured_finalize_func_->Instantiate(ctx));
+        return Status::OK();
       }
 
       Status GetNextInternal(IteratorContext* ctx,
@@ -414,7 +420,6 @@ class GroupByReducerDatasetOp : public UnaryDatasetOpKernel {
     const std::vector<PartialTensorShape> output_shapes_;
   };
 
-  const int graph_def_version_;
   DataTypeVector output_types_;
   std::vector<PartialTensorShape> output_shapes_;
   NameAttrList key_func_;
@@ -427,4 +432,5 @@ REGISTER_KERNEL_BUILDER(Name("GroupByReducerDataset").Device(DEVICE_CPU),
                         GroupByReducerDatasetOp);
 
 }  // namespace
+}  // namespace data
 }  // namespace tensorflow

@@ -23,9 +23,9 @@ import math
 import numpy as np
 
 from tensorflow.compiler.tests import xla_test
-from tensorflow.contrib import stateless
 from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import array_ops
+from tensorflow.python.ops import stateless_random_ops as stateless
 from tensorflow.python.ops.distributions import special_math
 from tensorflow.python.platform import test
 
@@ -33,12 +33,15 @@ from tensorflow.python.platform import test
 class StatelessRandomOpsTest(xla_test.XLATestCase):
   """Test cases for stateless random-number generator operators."""
 
-  def _random_types(self):
-    return [dtypes.float32]
+  def _random_types(self, include_int=False):
+    allowed_types = {dtypes.float32, dtypes.float64}
+    if include_int:
+      allowed_types.update({dtypes.int32, dtypes.int64})
+    return self.all_tf_types & allowed_types
 
   def testDeterminism(self):
     # Stateless values should be equal iff the seeds are equal (roughly)
-    with self.test_session(), self.test_scope():
+    with self.cached_session(), self.test_scope():
       seed_t = array_ops.placeholder(dtypes.int32, shape=[2])
       seeds = [(x, y) for x in range(5) for y in range(5)] * 3
       for stateless_op in [
@@ -55,14 +58,17 @@ class StatelessRandomOpsTest(xla_test.XLATestCase):
                 self.assertEqual(s0 == s1, np.all(v0 == v1))
 
   def testRandomUniformIsInRange(self):
-    with self.test_session() as sess, self.test_scope():
-      for dtype in self._random_types():
+    with self.cached_session() as sess, self.test_scope():
+      for dtype in self._random_types(include_int=True):
+        maxval = 1
+        if dtype.is_integer:
+          maxval = 100
         seed_t = array_ops.placeholder(dtypes.int32, shape=[2])
         x = stateless.stateless_random_uniform(
-            shape=[1000], seed=seed_t, dtype=dtype)
+            shape=[1000], seed=seed_t, maxval=maxval, dtype=dtype)
         y = sess.run(x, {seed_t: [0x12345678, 0xabcdef12]})
         self.assertTrue(np.all(y >= 0))
-        self.assertTrue(np.all(y < 1))
+        self.assertTrue(np.all(y < maxval))
 
   def _chi_squared(self, x, bins):
     """Pearson's Chi-squared test."""
@@ -74,13 +80,19 @@ class StatelessRandomOpsTest(xla_test.XLATestCase):
 
   def testDistributionOfStatelessRandomUniform(self):
     """Use Pearson's Chi-squared test to test for uniformity."""
-    with self.test_session() as sess, self.test_scope():
-      for dtype in self._random_types():
+    with self.cached_session() as sess, self.test_scope():
+      for dtype in self._random_types(include_int=True):
         seed_t = array_ops.placeholder(dtypes.int32, shape=[2])
         n = 1000
+        maxval = 1
+        if dtype.is_integer:
+          maxval = 100
         x = stateless.stateless_random_uniform(
-            shape=[n], seed=seed_t, dtype=dtype)
+            shape=[n], seed=seed_t, maxval=maxval, dtype=dtype)
         y = sess.run(x, {seed_t: [565656, 121212]})
+        if maxval > 1:
+          # Normalize y to range [0, 1).
+          y = y.astype(float) / maxval
         # Tests that the values are distributed amongst 10 bins with equal
         # probability. 16.92 is the Chi^2 value for 9 degrees of freedom with
         # p=0.05. This test is probabilistic and would be flaky if the random
@@ -88,10 +100,10 @@ class StatelessRandomOpsTest(xla_test.XLATestCase):
         self.assertTrue(self._chi_squared(y, 10) < 16.92)
 
   def testRandomNormalIsFinite(self):
-    with self.test_session() as sess, self.test_scope():
+    with self.cached_session() as sess, self.test_scope():
       for dtype in self._random_types():
         seed_t = array_ops.placeholder(dtypes.int32, shape=[2])
-        x = stateless.stateless_random_uniform(
+        x = stateless.stateless_random_normal(
             shape=[10000], seed=seed_t, dtype=dtype)
         y = sess.run(x, {seed_t: [0x12345678, 0xabcdef12]})
         self.assertTrue(np.all(np.isfinite(y)))
@@ -111,7 +123,7 @@ class StatelessRandomOpsTest(xla_test.XLATestCase):
 
   def testDistributionOfStatelessRandomNormal(self):
     """Use Anderson-Darling test to test distribution appears normal."""
-    with self.test_session() as sess, self.test_scope():
+    with self.cached_session() as sess, self.test_scope():
       for dtype in self._random_types():
         seed_t = array_ops.placeholder(dtypes.int32, shape=[2])
         n = 1000
@@ -124,9 +136,8 @@ class StatelessRandomOpsTest(xla_test.XLATestCase):
         self.assertTrue(self._anderson_darling(y) < 2.492)
 
   def testTruncatedNormalIsInRange(self):
-    # TODO(b/34339814): implement inverse erf support for non-F32 types.
-    for dtype in [dtypes.float32]:
-      with self.test_session() as sess, self.test_scope():
+    for dtype in self._random_types():
+      with self.cached_session() as sess, self.test_scope():
         seed_t = array_ops.placeholder(dtypes.int32, shape=[2])
         n = 10000000
         x = stateless.stateless_truncated_normal(
@@ -159,7 +170,7 @@ class StatelessRandomOpsTest(xla_test.XLATestCase):
         # Department of Scientific Computing website. Florida State University.
         expected_mean = mu + (normal_pdf(alpha) - normal_pdf(beta)) / z * sigma
         actual_mean = np.mean(y)
-        self.assertAllClose(actual_mean, expected_mean, atol=2e-4)
+        self.assertAllClose(actual_mean, expected_mean, atol=5e-4)
 
         expected_median = mu + probit(
             (normal_cdf(alpha) + normal_cdf(beta)) / 2.) * sigma

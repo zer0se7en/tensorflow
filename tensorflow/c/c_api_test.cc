@@ -33,6 +33,7 @@ limitations under the License.
 #include "tensorflow/core/framework/node_def.pb_text.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/op.h"
+#include "tensorflow/core/framework/op_def.pb.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/partial_tensor_shape.h"
 #include "tensorflow/core/framework/tensor.h"
@@ -195,12 +196,31 @@ TEST(CAPI, LibraryLoadFunctions) {
   TF_DeleteStatus(status);
   ASSERT_EQ(TF_OK, code) << status_msg;
 
-  // Test op list.
-  TF_Buffer op_list_buf = TF_GetOpList(lib);
-  tensorflow::OpList op_list;
-  EXPECT_TRUE(op_list.ParseFromArray(op_list_buf.data, op_list_buf.length));
-  ASSERT_EQ(op_list.op_size(), 1);
-  EXPECT_EQ("TestCApi", op_list.op(0).name());
+  {
+    TF_Buffer* op_list_buffer = TF_GetAllOpList();
+    tensorflow::OpList op_list;
+    op_list.ParseFromArray(op_list_buffer->data, op_list_buffer->length);
+    ASSERT_GE(op_list.op_size(), 1);
+    typedef tensorflow::protobuf::RepeatedPtrField<tensorflow::OpDef> OpDefs;
+    const OpDefs& ops = op_list.op();
+    bool found = std::find_if(ops.begin(), ops.end(),
+                              [](const tensorflow::OpDef& op_def) {
+                                return op_def.name() == "TestCApi";
+                              }) != ops.end();
+    EXPECT_TRUE(found);
+    TF_DeleteBuffer(op_list_buffer);
+  }
+
+#if !defined(TENSORFLOW_NO_SHARED_OBJECTS)
+  {
+    // Test op list.
+    TF_Buffer op_list_buf = TF_GetOpList(lib);
+    tensorflow::OpList op_list;
+    EXPECT_TRUE(op_list.ParseFromArray(op_list_buf.data, op_list_buf.length));
+    ASSERT_EQ(op_list.op_size(), 1);
+    EXPECT_EQ("TestCApi", op_list.op(0).name());
+  }
+#endif  // !defined(TENSORFLOW_NO_SHARED_OBJECTS)
 
   TF_DeleteLibraryHandle(lib);
 }
@@ -259,8 +279,8 @@ TEST(CAPI, DeprecatedSession) {
   TF_Run(session, run_options, nullptr, nullptr, 0, nullptr, nullptr, 0,
          nullptr, 0, run_metadata, s);
   EXPECT_EQ(TF_INVALID_ARGUMENT, TF_GetCode(s)) << TF_Message(s);
-  EXPECT_EQ(std::string("Session was not created with a graph before Run()!"),
-            std::string(TF_Message(s)));
+  EXPECT_EQ("Session was not created with a graph before Run()!",
+            string(TF_Message(s)));
   TF_DeleteBuffer(run_metadata);
   TF_DeleteBuffer(run_options);
 
@@ -1224,8 +1244,8 @@ class CApiColocationTest : public ::testing::Test {
         TF_OperationGetAttrMetadata(op, tensorflow::kColocationAttrName, s_);
     if (expected.empty()) {
       ASSERT_EQ(TF_INVALID_ARGUMENT, TF_GetCode(s_)) << TF_Message(s_);
-      EXPECT_EQ(std::string("Operation 'add' has no attr named '_class'."),
-                std::string(TF_Message(s_)));
+      EXPECT_EQ("Operation 'add' has no attr named '_class'.",
+                string(TF_Message(s_)));
       return;
     }
     EXPECT_EQ(TF_OK, TF_GetCode(s_)) << TF_Message(s_);
@@ -1369,16 +1389,16 @@ TEST(CAPI, SavedModel) {
     input.flat<string>()(i) = example.SerializeAsString();
   }
 
-  const tensorflow::string input_op_name =
-      std::string(tensorflow::ParseTensorName(input_name).first);
+  const tensorflow::string input_op_name(
+      tensorflow::ParseTensorName(input_name).first);
   TF_Operation* input_op =
       TF_GraphOperationByName(graph, input_op_name.c_str());
   ASSERT_TRUE(input_op != nullptr);
   csession.SetInputs({{input_op, TF_TensorFromTensor(input, s)}});
   ASSERT_EQ(TF_OK, TF_GetCode(s)) << TF_Message(s);
 
-  const tensorflow::string output_op_name =
-      std::string(tensorflow::ParseTensorName(output_name).first);
+  const tensorflow::string output_op_name(
+      tensorflow::ParseTensorName(output_name).first);
   TF_Operation* output_op =
       TF_GraphOperationByName(graph, output_op_name.c_str());
   ASSERT_TRUE(output_op != nullptr);
@@ -2335,9 +2355,9 @@ TEST(TestApiDef, TestCreateApiDef) {
   EXPECT_EQ(TF_OK, TF_GetCode(status)) << TF_Message(status);
   TF_DeleteStatus(status);
 
-  TF_Buffer op_list_buf = TF_GetOpList(lib);
+  TF_Buffer* op_list_buf = TF_GetAllOpList();
   status = TF_NewStatus();
-  auto* api_def_map = TF_NewApiDefMap(&op_list_buf, status);
+  auto* api_def_map = TF_NewApiDefMap(op_list_buf, status);
   EXPECT_EQ(TF_OK, TF_GetCode(status)) << TF_Message(status);
   TF_DeleteStatus(status);
 
@@ -2355,6 +2375,7 @@ TEST(TestApiDef, TestCreateApiDef) {
 
   TF_DeleteBuffer(api_def_buf);
   TF_DeleteApiDefMap(api_def_map);
+  TF_DeleteBuffer(op_list_buf);
   TF_DeleteLibraryHandle(lib);
 }
 
@@ -2369,9 +2390,9 @@ TEST(TestApiDef, TestCreateApiDefWithOverwrites) {
   EXPECT_EQ(TF_OK, TF_GetCode(status)) << TF_Message(status);
   TF_DeleteStatus(status);
 
-  TF_Buffer op_list_buf = TF_GetOpList(lib);
+  TF_Buffer* op_list_buf = TF_GetAllOpList();
   status = TF_NewStatus();
-  auto* api_def_map = TF_NewApiDefMap(&op_list_buf, status);
+  auto* api_def_map = TF_NewApiDefMap(op_list_buf, status);
   EXPECT_EQ(TF_OK, TF_GetCode(status)) << TF_Message(status);
   TF_DeleteStatus(status);
 
@@ -2400,6 +2421,7 @@ TEST(TestApiDef, TestCreateApiDefWithOverwrites) {
 
   TF_DeleteBuffer(api_def_buf);
   TF_DeleteApiDefMap(api_def_map);
+  TF_DeleteBuffer(op_list_buf);
   TF_DeleteLibraryHandle(lib);
 }
 

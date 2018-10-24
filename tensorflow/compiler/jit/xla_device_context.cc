@@ -50,7 +50,7 @@ void XlaDeviceAllocator::DeallocateRaw(void* ptr) {
 
 void XlaDeviceAllocator::GetStats(AllocatorStats* stats) { stats->Clear(); }
 
-XlaTransferManager::XlaTransferManager(
+XlaDeviceContext::XlaDeviceContext(
     std::shared_ptr<se::Stream> compute_stream,
     std::shared_ptr<se::Stream> host_to_device_stream,
     std::shared_ptr<se::Stream> device_to_host_stream, xla::LocalClient* client,
@@ -75,8 +75,8 @@ XlaTransferManager::XlaTransferManager(
   }
 }
 
-Status XlaTransferManager::TransferLiteralToDevice(
-    const Tensor& host_tensor, Tensor* device_tensor) const {
+Status XlaDeviceContext::TransferLiteralToDevice(const Tensor& host_tensor,
+                                                 Tensor* device_tensor) const {
   xla::Shape xla_shape;
   TF_RETURN_IF_ERROR(TensorShapeToXLAShape(host_tensor.dtype(),
                                            host_tensor.shape(), &xla_shape));
@@ -91,7 +91,8 @@ Status XlaTransferManager::TransferLiteralToDevice(
   const xla::ShapedBuffer& shaped_buffer = xla_tensor->shaped_buffer();
   VLOG(1) << "Transfer to device as literal: " << literal->ToString() << " "
           << shaped_buffer.ToString();
-  if (UseMultipleStreams()) {
+  if (UseMultipleStreams() && !transfer_manager_->CanShapedBufferBeAccessedNow(
+                                  stream_->parent(), shaped_buffer)) {
     // Initially wait for the compute stream so that memory allocations are
     // synchronized.
     host_to_device_stream_->ThenWaitFor(stream_.get());
@@ -102,7 +103,8 @@ Status XlaTransferManager::TransferLiteralToDevice(
     auto event = std::make_shared<se::Event>(stream_->parent());
     TF_RET_CHECK(event->Init()) << "Event failed to initialize!";
     host_to_device_stream_->ThenRecordEvent(event.get());
-    xla_tensor->SetDefinedOn(host_to_device_stream_.get(), std::move(event));
+    xla_tensor->ResetDefinitionEvent(std::move(event),
+                                     host_to_device_stream_.get());
   }
   // Unref the host tensor, and capture the literal shared_ptr too so it goes
   // out of scope when the lambda completes.
@@ -111,7 +113,7 @@ Status XlaTransferManager::TransferLiteralToDevice(
   return Status::OK();
 }
 
-void XlaTransferManager::TransferLiteralFromDevice(
+void XlaDeviceContext::TransferLiteralFromDevice(
     Tensor* host_tensor, const Tensor& device_tensor,
     const StatusCallback& done) const {
   xla::MutableBorrowingLiteral literal;
@@ -123,20 +125,20 @@ void XlaTransferManager::TransferLiteralFromDevice(
   TensorReference ref(device_tensor);
   transfer_manager_->TransferLiteralFromDevice(
       device_to_host_stream_.get(), shaped_buffer, literal,
-      [=, &shaped_buffer, &literal](xla::Status status) {
+      [=, &shaped_buffer](xla::Status status) {
         ref.Unref();
         done([&]() -> Status {
-          VLOG(1) << "Transfer from device as literal: " << literal.ToString()
-                  << " " << shaped_buffer.ToString();
+          VLOG(1) << "Transfer from device as literal: "
+                  << shaped_buffer.ToString();
           return status;
         }());
       });
 }
 
-void XlaTransferManager::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
-                                               Device* device,
-                                               Tensor* device_tensor,
-                                               StatusCallback done) const {
+void XlaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
+                                             Device* device,
+                                             Tensor* device_tensor,
+                                             StatusCallback done) const {
   if (cpu_tensor->NumElements() == 0) {
     VLOG(2) << "CopyCPUTensorToDevice empty tensor";
     done(Status::OK());
@@ -183,18 +185,6 @@ void XlaTransferManager::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
       return;
     }
     status = TransferLiteralToDevice(reshaped_cpu_tensor, device_tensor);
-    if (status.ok()) {
-      xla_tensor->set_host_tensor(*cpu_tensor);
-      host_to_device_stream_->ThenDoHostCallback([this, done]() {
-        // We must not call the done closure directly from DoHostCallback
-        // to avoid a deadlock. If done() is the callback that ends an
-        // Executor's run, the Executor may call XlaDevice::Sync() inside the
-        // callback. This deadlocks, because XlaDevice::Sync() waits for all
-        // stream activity to complete.
-        thread_pool_->Schedule([done]() { done(Status::OK()); });
-      });
-      return;
-    }
   } else {
     se::DeviceMemoryBase dev_dst_ptr =
         XlaTensor::DeviceMemoryFromTensor(*device_tensor);
@@ -207,16 +197,16 @@ void XlaTransferManager::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
           host_to_device_stream_.get(), block_status.error_message().c_str());
     }
   }
-  xla_tensor->set_host_tensor(*cpu_tensor);
-
+  if (status.ok()) {
+    xla_tensor->set_host_tensor(*cpu_tensor);
+  }
   done(status);
 }
 
-void XlaTransferManager::CopyDeviceTensorToCPU(const Tensor* device_tensor,
-                                               StringPiece tensor_name,
-                                               Device* device,
-                                               Tensor* cpu_tensor,
-                                               StatusCallback done) {
+void XlaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
+                                             absl::string_view tensor_name,
+                                             Device* device, Tensor* cpu_tensor,
+                                             StatusCallback done) {
   if (device_tensor->NumElements() == 0) {
     VLOG(2) << "CopyDeviceTensorToCPU empty tensor";
     done(Status::OK());
@@ -236,11 +226,7 @@ void XlaTransferManager::CopyDeviceTensorToCPU(const Tensor* device_tensor,
   void* dst_ptr = DMAHelper::base(cpu_tensor);
   XlaTensor* xla_tensor = XlaTensor::FromTensor(device_tensor);
 
-  if (se::Event* event =
-          xla_tensor->GetDefinitionEvent(device_to_host_stream_.get())) {
-    device_to_host_stream_->ThenWaitFor(event);
-    xla_tensor->SetDefinedOn(device_to_host_stream_.get());
-  }
+  xla_tensor->WaitForDefinitionEventOnStream(device_to_host_stream_.get());
 
   Status status;
   if (transfer_as_literal_) {
@@ -260,9 +246,9 @@ void XlaTransferManager::CopyDeviceTensorToCPU(const Tensor* device_tensor,
   done(status);
 }
 
-void XlaTransferManager::CopyDeviceTensorToDevice(const Tensor& src_tensor,
-                                                  Tensor* dst_tensor,
-                                                  const StatusCallback& done) {
+void XlaDeviceContext::CopyDeviceTensorToDevice(const Tensor& src_tensor,
+                                                Tensor* dst_tensor,
+                                                const StatusCallback& done) {
   VLOG(2) << "CopyDeviceTensorToDevice "
           << reinterpret_cast<const void*>(src_tensor.tensor_data().data())
           << " "
@@ -294,11 +280,7 @@ void XlaTransferManager::CopyDeviceTensorToDevice(const Tensor& src_tensor,
       }
     }
 
-    if (se::Event* event =
-            xla_src->GetDefinitionEvent(device_to_device_stream.get())) {
-      device_to_device_stream->ThenWaitFor(event);
-      xla_src->SetDefinedOn(device_to_device_stream.get());
-    }
+    xla_src->WaitForDefinitionEventOnStream(device_to_device_stream.get());
 
     auto from_iter = xla_src->shaped_buffer().buffers().begin();
     auto to_iter = xla_dst->shaped_buffer().buffers().begin();
@@ -312,7 +294,8 @@ void XlaTransferManager::CopyDeviceTensorToDevice(const Tensor& src_tensor,
       auto event = std::make_shared<se::Event>(stream_->parent());
       TF_RET_CHECK(event->Init()) << "Event failed to initialize";
       device_to_device_stream->ThenRecordEvent(event.get());
-      xla_dst->SetDefinedOn(device_to_device_stream.get(), std::move(event));
+      xla_dst->ResetDefinitionEvent(std::move(event),
+                                    device_to_device_stream.get());
     }
     return Status::OK();
   }();
@@ -328,38 +311,6 @@ void XlaTransferManager::CopyDeviceTensorToDevice(const Tensor& src_tensor,
       thread_pool_->Schedule([done]() { done(Status::OK()); });
     });
   }
-}
-
-XlaDeviceContext::XlaDeviceContext(
-    std::shared_ptr<se::Stream> compute_stream,
-    std::shared_ptr<se::Stream> host_to_device_stream,
-    std::shared_ptr<se::Stream> device_to_host_stream, xla::LocalClient* client,
-    bool transfer_as_literal,
-    XlaCompiler::ShapeRepresentationFn shape_representation_fn,
-    thread::ThreadPool* thread_pool)
-    : manager_(std::move(compute_stream), std::move(host_to_device_stream),
-               std::move(device_to_host_stream), client, transfer_as_literal,
-               std::move(shape_representation_fn), thread_pool) {}
-
-void XlaDeviceContext::CopyCPUTensorToDevice(const Tensor* cpu_tensor,
-                                             Device* device,
-                                             Tensor* device_tensor,
-                                             StatusCallback done) const {
-  manager_.CopyCPUTensorToDevice(cpu_tensor, device, device_tensor, done);
-}
-
-void XlaDeviceContext::CopyDeviceTensorToCPU(const Tensor* device_tensor,
-                                             StringPiece tensor_name,
-                                             Device* device, Tensor* cpu_tensor,
-                                             StatusCallback done) {
-  manager_.CopyDeviceTensorToCPU(device_tensor, tensor_name, device, cpu_tensor,
-                                 done);
-}
-
-void XlaDeviceContext::CopyDeviceTensorToDevice(const Tensor& src_tensor,
-                                                Tensor* dst_tensor,
-                                                const StatusCallback& done) {
-  manager_.CopyDeviceTensorToDevice(src_tensor, dst_tensor, done);
 }
 
 }  // namespace tensorflow
