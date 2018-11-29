@@ -18,10 +18,13 @@ cc_library(
 )
 
 load("//tensorflow/core/kernels/fuzzing:tf_ops_fuzz_target_lib.bzl", "tf_ops_fuzz_target_lib")
+load("//tensorflow/core/kernels/fuzzing:tf_ops_fuzz_target_lib.bzl", "tf_oss_fuzz_corpus")
 
 tf_ops_fuzz_target_lib("identity")
 
 tf_ops_fuzz_target_lib("string_to_number")
+
+tf_oss_fuzz_corpus("string_to_number")
 
 tf_ops_fuzz_target_lib("string_split")
 
@@ -36,8 +39,6 @@ tf_ops_fuzz_target_lib("encode_jpeg")
 tf_ops_fuzz_target_lib("decode_bmp")
 
 tf_ops_fuzz_target_lib("decode_png")
-
-tf_ops_fuzz_target_lib("decode_jpeg")
 
 tf_ops_fuzz_target_lib("decode_wav")
 

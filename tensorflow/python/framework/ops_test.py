@@ -317,7 +317,7 @@ class OperationTest(test_util.TensorFlowTestCase):
       values = [[2], [3], [5], [7]]
       tensor = ops.convert_to_tensor(values)
       self.assertAllEqual((4, 1), tensor.get_shape().as_list())
-      self.assertAllEqual(values, tensor.eval())
+      self.assertAllEqual(values, self.evaluate(tensor))
 
   def testShapeTuple(self):
     with self.cached_session():
@@ -346,18 +346,18 @@ class OperationTest(test_util.TensorFlowTestCase):
       tensor = ops.convert_to_tensor(
           [constant_op.constant(row) for row in values])
       self.assertAllEqual((4, 1), tensor.get_shape().as_list())
-      self.assertAllEqual(values, tensor.eval())
+      self.assertAllEqual(values, self.evaluate(tensor))
       tensor = ops.convert_to_tensor(
           [[constant_op.constant(v) for v in row] for row in values])
       self.assertAllEqual((4, 1), tensor.get_shape().as_list())
-      self.assertAllEqual(values, tensor.eval())
+      self.assertAllEqual(values, self.evaluate(tensor))
 
   def testConvertToTensorNestedMix(self):
     with self.cached_session():
       values = ([2], (3,), [constant_op.constant(5)], constant_op.constant([7]))
       tensor = ops.convert_to_tensor(values)
       self.assertAllEqual((4, 1), tensor.get_shape().as_list())
-      self.assertAllEqual(((2,), (3,), (5,), (7,)), tensor.eval())
+      self.assertAllEqual(((2,), (3,), (5,), (7,)), self.evaluate(tensor))
 
   def testConvertToTensorPreferred(self):
     with self.cached_session():
@@ -503,7 +503,7 @@ class OperationTest(test_util.TensorFlowTestCase):
       with self.assertRaisesRegexp(
           errors.InvalidArgumentError,
           "Graph is invalid, contains a cycle with 2 nodes"):
-        sess.run(x)
+        self.evaluate(x)
 
   def testUpdateInput(self):
     g = ops.Graph()
@@ -517,21 +517,21 @@ class OperationTest(test_util.TensorFlowTestCase):
     self.assertEquals(x.consumers(), [])
     self.assertEquals(y.consumers(), [z.op, z.op])
     with session.Session(graph=g) as sess:
-      self.assertEquals(sess.run(z), 4)
+      self.assertEquals(self.evaluate(z), 4)
 
     z.op._update_input(0, x)  # pylint: disable=protected-access
     self.assertEquals(list(z.op.inputs), [x, y])
     self.assertEquals(x.consumers(), [z.op])
     self.assertEquals(y.consumers(), [z.op])
     with session.Session(graph=g) as sess:
-      self.assertEquals(sess.run(z), 3)
+      self.assertEquals(self.evaluate(z), 3)
 
     z.op._update_input(1, y)  # pylint: disable=protected-access
     self.assertEquals(list(z.op.inputs), [x, y])
     self.assertEquals(x.consumers(), [z.op])
     self.assertEquals(y.consumers(), [z.op])
     with session.Session(graph=g) as sess:
-      self.assertEquals(sess.run(z), 3)
+      self.assertEquals(self.evaluate(z), 3)
 
   def testUpdateInputGraphError(self):
     g_0 = ops.Graph()
@@ -557,7 +557,7 @@ class OperationTest(test_util.TensorFlowTestCase):
           errors.InvalidArgumentError,
           "Input 0 of node add was passed string from Const_1:0 incompatible "
           "with expected int32"):
-        sess.run(z)
+        self.evaluate(z)
 
   def testUpdateInputShapeError(self):
     g = ops.Graph()
@@ -701,7 +701,6 @@ class CreateOpFromTFOperationTest(test_util.TensorFlowTestCase):
     self.assertEqual(g.get_operation_by_name("myop"), op)
     self.assertEqual(g.get_tensor_by_name("myop:0"), op.outputs[0])
 
-  @test_util.enable_c_shapes
   def testShape(self):
     g = ops.Graph()
     with g.as_default():
@@ -1075,6 +1074,13 @@ class DeviceTest(test_util.TensorFlowTestCase):
     self.assertProtoEqualsVersion("""
       node { name: "FloatOutput" op: "FloatOutput" }
     """, gd)
+
+  def testEagerBackingDevice(self):
+    with context.eager_mode():
+      with ops.device("/device:CPU:0"):
+        t = constant_op.constant(1.0)
+        self.assertRegexpMatches(t.device, "/device:CPU:0")
+        self.assertRegexpMatches(t.backing_device, "/device:CPU:0")
 
   def testDevicePartialString(self):
     g = ops.Graph()
@@ -2292,6 +2298,19 @@ class InitScopeTest(test_util.TensorFlowTestCase):
       foo_compiled()
       self.assertEqual(ops.get_name_scope(), "")
 
+  def testExecutingEagerlyOutsideFunctions(self):
+
+    @eager_function.defun
+    def f():
+      return ops.executing_eagerly_outside_functions()
+
+    with context.eager_mode():
+      self.assertTrue(ops.executing_eagerly_outside_functions())
+      self.assertTrue(f())
+      g = ops.Graph()
+      with g.as_default():
+        self.assertFalse(ops.executing_eagerly_outside_functions())
+
 
 class GraphTest(test_util.TensorFlowTestCase):
 
@@ -2378,7 +2397,7 @@ class GraphTest(test_util.TensorFlowTestCase):
       c = math_ops.add(a, b)
     # Create a session we can delete
     with session.Session(graph=g) as sess:
-      sess.run(c)
+      self.evaluate(c)
     # Delete all references and trigger gc
     del g
     del a
@@ -2394,7 +2413,7 @@ class GraphTest(test_util.TensorFlowTestCase):
         math_ops.add([1, 2], [1, 2, 3])
       a = constant_op.constant(1)
       with session.Session() as sess:
-        sess.run(a)
+        self.evaluate(a)
 
   def testRunnableAfterInvalidShapeWithKernelLabelMap(self):
     g = ops.Graph()
@@ -2404,7 +2423,7 @@ class GraphTest(test_util.TensorFlowTestCase):
           test_ops.kernel_label_required(1)
       a = constant_op.constant(1)
       with session.Session() as sess:
-        sess.run(a)
+        self.evaluate(a)
 
 
 class AttrScopeTest(test_util.TensorFlowTestCase):
@@ -2478,12 +2497,14 @@ class KernelLabelTest(test_util.TensorFlowTestCase):
       # pylint: enable=protected-access
       default_3 = test_ops.kernel_label()
 
-      self.assertAllEqual(b"My label is: default", default_1.eval())
-      self.assertAllEqual(b"My label is: default", default_2.eval())
-      self.assertAllEqual(b"My label is: default", default_3.eval())
-      self.assertAllEqual(b"My label is: overload_1", overload_1_1.eval())
-      self.assertAllEqual(b"My label is: overload_1", overload_1_2.eval())
-      self.assertAllEqual(b"My label is: overload_2", overload_2.eval())
+      self.assertAllEqual(b"My label is: default", self.evaluate(default_1))
+      self.assertAllEqual(b"My label is: default", self.evaluate(default_2))
+      self.assertAllEqual(b"My label is: default", self.evaluate(default_3))
+      self.assertAllEqual(b"My label is: overload_1",
+                          self.evaluate(overload_1_1))
+      self.assertAllEqual(b"My label is: overload_1",
+                          self.evaluate(overload_1_2))
+      self.assertAllEqual(b"My label is: overload_2", self.evaluate(overload_2))
 
 
 class AsGraphDefTest(test_util.TensorFlowTestCase):

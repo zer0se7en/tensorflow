@@ -14,10 +14,12 @@ load("//tensorflow:tensorflow.bzl", "tf_py_test")
 package(
     default_visibility = [
         "//cloud/vmm/testing/tests/tpu:__subpackages__",
+        "//knowledge/cerebra/sense/im2query:__subpackages__",
         "//learning/brain:__subpackages__",
         "//learning/deepmind:__subpackages__",
         "//medical/pathology:__subpackages__",
         "//tensorflow:__subpackages__",
+        "//vr/perception:__subpackages__",
     ],
 )
 
@@ -245,6 +247,7 @@ py_library(
         "python/tpu/bfloat16.py",
         "python/tpu/device_assignment.py",
         "python/tpu/session_support.py",
+        "python/tpu/tensor_tracer.py",
         "python/tpu/topology.py",
         "python/tpu/tpu.py",
         "python/tpu/tpu_feed.py",

@@ -34,12 +34,16 @@ class APIChangeSpec(object):
 
   * `function_keyword_renames`: maps function names to a map of old -> new
     argument names
-  * `function_renames`: maps function names to new function names
+  * `symbol_renames`: maps function names to new function names
   * `change_to_function`: a set of function names that have changed (for
     notifications)
   * `function_reorders`: maps functions whose argument order has changed to the
     list of arguments in the new order
   * `function_handle`: maps function names to custom handlers for the function
+  * `function_warnings`: maps full names of functions to warnings that will be
+    printed out if the function is used. (e.g. tf.nn.convolution())
+  * `unrestricted_function_warnings`: maps names of functions to warnings that
+    will be printed out when the function is used (e.g. foo.convolution()).
 
   For an example, see `TFAPIChangeSpec`.
   """
@@ -176,13 +180,47 @@ class _ASTCallVisitor(ast.NodeVisitor):
     ast.NodeVisitor.generic_visit(self, node)
 
   def _rename_functions(self, node, full_name):
-    function_renames = self._api_change_spec.function_renames
+    symbol_renames = self._api_change_spec.symbol_renames
     try:
-      new_name = function_renames[full_name]
+      new_name = symbol_renames[full_name]
       self._file_edit.add("Renamed function %r to %r" % (full_name, new_name),
                           node.lineno, node.col_offset, full_name, new_name)
     except KeyError:
       pass
+
+  def _print_warning_for_function(self, node, full_name):
+    function_warnings = self._api_change_spec.function_warnings
+    try:
+      warning_message = function_warnings[full_name]
+      warning_message = warning_message.replace("<function name>", full_name)
+      self._file_edit.add(warning_message,
+                          node.lineno, node.col_offset, full_name, full_name,
+                          error="%s requires manual check." % full_name)
+    except KeyError:
+      pass
+
+  def _print_warning_for_function_unrestricted(self, node):
+    """Print a warning when specific functions are called.
+
+    The function _print_warning_for_function matches the full name of the called
+    function, e.g., tf.foo.bar(). This function matches the function name that
+    is called, as long as the function is an attribute. For example,
+    `tf.foo.bar()` and `foo.bar()` are matched, but not `bar()`.
+
+    Args:
+      node: ast.Call object
+    """
+    function_warnings = getattr(
+        self._api_change_spec, "unrestricted_function_warnings", {})
+    if isinstance(node.func, ast.Attribute):
+      function_name = node.func.attr
+      try:
+        warning_message = function_warnings[function_name]
+        self._file_edit.add(warning_message,
+                            node.lineno, node.col_offset, "", "",
+                            error="%s requires manual check." % function_name)
+      except KeyError:
+        pass
 
   def _get_attribute_full_path(self, node):
     """Traverse an attribute to generate a full name e.g. tf.foo.bar.
@@ -198,11 +236,11 @@ class _ASTCallVisitor(ast.NodeVisitor):
     items = []
     while not isinstance(curr, ast.Name):
       if not isinstance(curr, ast.Attribute):
-        return None
+        return None, None
       items.append(curr.attr)
       curr = curr.value
     items.append(curr.id)
-    return ".".join(reversed(items))
+    return ".".join(reversed(items)), items[0]
 
   def _find_true_position(self, node):
     """Return correct line number and column offset for a given node.
@@ -265,9 +303,10 @@ class _ASTCallVisitor(ast.NodeVisitor):
     Args:
       node: Current Node
     """
+    self._print_warning_for_function_unrestricted(node)
 
     # Find a simple attribute name path e.g. "tf.foo.bar"
-    full_name = self._get_attribute_full_path(node.func)
+    full_name, name = self._get_attribute_full_path(node.func)
 
     # Make sure the func is marked as being part of a call
     node.func.is_function_for_call = True
@@ -275,6 +314,9 @@ class _ASTCallVisitor(ast.NodeVisitor):
     if full_name:
       # Call special handlers
       function_handles = self._api_change_spec.function_handle
+      glob_name = "*.{}".format(name)
+      if glob_name in function_handles:
+        function_handles[glob_name](self._file_edit, node)
       if full_name in function_handles:
         function_handles[full_name](self._file_edit, node)
 
@@ -347,9 +389,10 @@ class _ASTCallVisitor(ast.NodeVisitor):
     Args:
       node: Node that is of type ast.Attribute
     """
-    full_name = self._get_attribute_full_path(node)
+    full_name, _ = self._get_attribute_full_path(node)
     if full_name:
       self._rename_functions(node, full_name)
+      self._print_warning_for_function(node, full_name)
     if full_name in self._api_change_spec.change_to_function:
       if not hasattr(node, "is_function_for_call"):
         new_text = full_name + "()"

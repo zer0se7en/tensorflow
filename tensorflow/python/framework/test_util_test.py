@@ -24,6 +24,7 @@ import random
 import threading
 import weakref
 
+from absl.testing import parameterized
 import numpy as np
 
 from google.protobuf import text_format
@@ -46,7 +47,7 @@ from tensorflow.python.ops import variables
 from tensorflow.python.platform import googletest
 
 
-class TestUtilTest(test_util.TensorFlowTestCase):
+class TestUtilTest(test_util.TensorFlowTestCase, parameterized.TestCase):
 
   def test_assert_ops_in_graph(self):
     with self.test_session():
@@ -680,7 +681,7 @@ class TestUtilTest(test_util.TensorFlowTestCase):
     self.assertIsNone(test_util.get_node_def_from_graph("bar", graph_def))
 
   def test_run_in_eager_and_graph_modes_test_class(self):
-    msg = "`run_test_in_graph_and_eager_modes` only supports test methods.*"
+    msg = "`run_in_graph_and_eager_modes` only supports test methods.*"
     with self.assertRaisesRegexp(ValueError, msg):
       @test_util.run_in_graph_and_eager_modes()
       class Foo(object):
@@ -727,6 +728,12 @@ class TestUtilTest(test_util.TensorFlowTestCase):
 
     self.assertEqual(modes[0:2], ["setup_graph", "run_graph"])
     self.assertEqual(modes[2:], ["setup_eager", "run_eager"])
+
+  @parameterized.named_parameters(dict(testcase_name="argument",
+                                       arg=True))
+  @test_util.run_in_graph_and_eager_modes
+  def test_run_in_graph_and_eager_works_with_parameterized_keyword(self, arg):
+    self.assertEqual(arg, True)
 
 
 # Its own test case to reproduce variable sharing issues which only pop up when
