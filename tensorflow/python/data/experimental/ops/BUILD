@@ -5,6 +5,16 @@ licenses(["notice"])  # Apache 2.0
 exports_files(["LICENSE"])
 
 py_library(
+    name = "cardinality",
+    srcs = ["cardinality.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        "//tensorflow/python:experimental_dataset_ops_gen",
+        "//tensorflow/python:tensor_util",
+    ],
+)
+
+py_library(
     name = "counter",
     srcs = ["counter.py"],
     srcs_version = "PY2AND3",
@@ -54,14 +64,13 @@ py_library(
     srcs_version = "PY2AND3",
     deps = [
         "//tensorflow/python:constant_op",
-        "//tensorflow/python:dataset_ops_gen",
         "//tensorflow/python:dtypes",
+        "//tensorflow/python:experimental_dataset_ops_gen",
         "//tensorflow/python:framework_ops",
         "//tensorflow/python:random_seed",
         "//tensorflow/python:tensor_shape",
         "//tensorflow/python/data/ops:dataset_ops",
-        "//tensorflow/python/data/util:nest",
-        "//tensorflow/python/data/util:sparse",
+        "//tensorflow/python/data/util:structure",
     ],
 )
 
@@ -125,6 +134,7 @@ py_library(
         "//tensorflow/python/data/util:convert",
         "//tensorflow/python/data/util:nest",
         "//tensorflow/python/data/util:sparse",
+        "//tensorflow/python/data/util:structure",
         "//third_party/py/numpy",
     ],
 )
@@ -136,6 +146,18 @@ py_library(
     deps = [
         "//tensorflow/python:dtypes",
         "//tensorflow/python/data/ops:dataset_ops",
+    ],
+)
+
+py_library(
+    name = "filter_for_shard_ops",
+    srcs = ["filter_for_shard_ops.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        "//tensorflow/python:dtypes",
+        "//tensorflow/python:math_ops",
+        "//tensorflow/python:ops",
+        "//tensorflow/python:tensor_util",
     ],
 )
 
@@ -207,6 +229,8 @@ py_library(
         "//tensorflow/python:dataset_ops_gen",
         "//tensorflow/python:framework_ops",
         "//tensorflow/python:tensor_shape",
+        "//tensorflow/python/data/ops:dataset_ops",
+        "//tensorflow/python/data/util:structure",
     ],
 )
 
@@ -224,6 +248,16 @@ py_library(
 )
 
 py_library(
+    name = "optimization_options",
+    srcs = ["optimization_options.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        "//tensorflow/python:util",
+        "//tensorflow/python/data/util:options",
+    ],
+)
+
+py_library(
     name = "parsing_ops",
     srcs = ["parsing_ops.py"],
     srcs_version = "PY2AND3",
@@ -235,7 +269,7 @@ py_library(
         "//tensorflow/python:sparse_tensor",
         "//tensorflow/python:tensor_shape",
         "//tensorflow/python/data/ops:dataset_ops",
-        "//tensorflow/python/data/util:nest",
+        "//tensorflow/python/data/util:structure",
     ],
 )
 
@@ -264,12 +298,13 @@ py_library(
     srcs = ["scan_ops.py"],
     srcs_version = "PY2AND3",
     deps = [
-        "//tensorflow/python:dataset_ops_gen",
+        "//tensorflow/python:experimental_dataset_ops_gen",
         "//tensorflow/python:framework_ops",
         "//tensorflow/python:function",
         "//tensorflow/python/data/ops:dataset_ops",
         "//tensorflow/python/data/util:nest",
         "//tensorflow/python/data/util:sparse",
+        "//tensorflow/python/data/util:structure",
     ],
 )
 
@@ -316,6 +351,19 @@ py_library(
         ":stats_aggregator",
         "//tensorflow/python:util",
         "//tensorflow/python/data/util:options",
+    ],
+)
+
+py_library(
+    name = "take_while_ops",
+    srcs = ["take_while_ops.py"],
+    srcs_version = "PY2AND3",
+    deps = [
+        "//tensorflow/python:dtypes",
+        "//tensorflow/python:experimental_dataset_ops_gen",
+        "//tensorflow/python:framework_ops",
+        "//tensorflow/python:function",
+        "//tensorflow/python/data/ops:dataset_ops",
     ],
 )
 
@@ -400,9 +448,11 @@ py_library(
     name = "dataset_ops",
     deps = [
         ":batching",
+        ":cardinality",
         ":counter",
         ":enumerate_ops",
         ":error_ops",
+        ":filter_for_shard_ops",
         ":get_single_element",
         ":grouping",
         ":indexed_dataset_ops",
@@ -417,6 +467,7 @@ py_library(
         ":shuffle_ops",
         ":sleep",
         ":stats_ops",
+        ":take_while_ops",
         ":threadpool",
         ":unique",
         ":writers",

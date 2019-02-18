@@ -39,7 +39,7 @@ from tensorflow.python.util import deprecation
 from tensorflow.python.util.tf_export import tf_export
 
 
-def _parse_saved_model(export_dir):
+def parse_saved_model(export_dir):
   """Reads the savedmodel.pb or savedmodel.pbtxt file containing `SavedModel`.
 
   Args:
@@ -83,7 +83,12 @@ def _parse_saved_model(export_dir):
                    constants.SAVED_MODEL_FILENAME_PB))
 
 
-def _get_asset_tensors(export_dir, meta_graph_def_to_load, import_scope=None):
+# TODO(b/120594573): Make this symbol also available as private, so that
+# tensorflow_transform and tensorflow_estimator do not break.
+_parse_saved_model = parse_saved_model
+
+
+def get_asset_tensors(export_dir, meta_graph_def_to_load, import_scope=None):
   """Gets the asset tensors, if defined in the meta graph def to load.
 
   Args:
@@ -276,7 +281,7 @@ class SavedModelLoader(object):
     """
     self._export_dir = export_dir
     self._variables_path = saved_model_utils.get_variables_path(export_dir)
-    self._saved_model = _parse_saved_model(export_dir)
+    self._saved_model = parse_saved_model(export_dir)
 
   @property
   def export_dir(self):
@@ -388,7 +393,7 @@ class SavedModelLoader(object):
     meta_graph_def = self.get_meta_graph_def_from_tags(tags)
     with sess.graph.as_default():
       # Get asset tensors, if any.
-      asset_tensors_dictionary = _get_asset_tensors(
+      asset_tensors_dictionary = get_asset_tensors(
           self._export_dir, meta_graph_def, import_scope=import_scope)
 
       init_op = get_init_op(meta_graph_def, import_scope)

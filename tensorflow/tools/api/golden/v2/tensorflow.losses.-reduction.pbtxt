@@ -4,7 +4,7 @@ tf_class {
   is_instance: "<type \'object\'>"
   member {
     name: "NONE"
-    mtype: "<type \'NoneType\'>"
+    mtype: "<type \'str\'>"
   }
   member {
     name: "SUM"

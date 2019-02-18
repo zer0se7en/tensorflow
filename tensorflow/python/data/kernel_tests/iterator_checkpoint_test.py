@@ -28,7 +28,7 @@ from tensorflow.python.framework import test_util
 from tensorflow.python.ops import math_ops
 from tensorflow.python.platform import test
 from tensorflow.python.training import checkpoint_management
-from tensorflow.python.training.checkpointable import util as checkpointable_utils
+from tensorflow.python.training.tracking import util as trackable_utils
 
 
 @test_util.run_all_in_graph_and_eager_modes
@@ -40,10 +40,10 @@ class IteratorCheckpointingTest(test_base.DatasetTestBase):
     dataset = dataset_ops.Dataset.from_tensor_slices([1, 2, 3, 4, 5, 6]).map(
         math_ops.square).batch(2)
     iterator = iter(dataset) if context.executing_eagerly(
-    ) else dataset.make_one_shot_iterator()
+    ) else dataset_ops.make_one_shot_iterator(dataset)
     get_next = iterator.get_next if context.executing_eagerly(
     ) else functools.partial(self.evaluate, iterator.get_next())
-    checkpoint = checkpointable_utils.Checkpoint(iterator=iterator)
+    checkpoint = trackable_utils.Checkpoint(iterator=iterator)
     self.assertAllEqual([1, 4], get_next())
     save_path = checkpoint.save(checkpoint_prefix)
     self.assertAllEqual([9, 16], get_next())
@@ -61,19 +61,19 @@ class IteratorCheckpointingTest(test_base.DatasetTestBase):
         [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
     dataset = dataset.map(math_ops.square).batch(2)
     iterator_1 = iter(dataset) if context.executing_eagerly(
-    ) else dataset.make_one_shot_iterator()
+    ) else dataset_ops.make_one_shot_iterator(dataset)
     get_next_1 = iterator_1.get_next if context.executing_eagerly(
     ) else functools.partial(self.evaluate, iterator_1.get_next())
     iterator_2 = iter(dataset) if context.executing_eagerly(
-    ) else dataset.make_one_shot_iterator()
+    ) else dataset_ops.make_one_shot_iterator(dataset)
     get_next_2 = iterator_2.get_next if context.executing_eagerly(
     ) else functools.partial(self.evaluate, iterator_2.get_next())
     dataset_2 = dataset_ops.Dataset.range(10)
     iterator_3 = iter(dataset_2) if context.executing_eagerly(
-    ) else dataset_2.make_one_shot_iterator()
+    ) else dataset_ops.make_one_shot_iterator(dataset_2)
     get_next_3 = iterator_3.get_next if context.executing_eagerly(
     ) else functools.partial(self.evaluate, iterator_3.get_next())
-    checkpoint = checkpointable_utils.Checkpoint(
+    checkpoint = trackable_utils.Checkpoint(
         iterator_1=iterator_1, iterator_2=iterator_2, iterator_3=iterator_3)
     self.assertAllEqual([1, 4], get_next_1())
     self.assertAllEqual(0, get_next_3())
@@ -93,10 +93,10 @@ class IteratorCheckpointingTest(test_base.DatasetTestBase):
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     dataset = dataset_ops.Dataset.range(3)
     iterator = iter(dataset) if context.executing_eagerly(
-    ) else dataset.make_one_shot_iterator()
+    ) else dataset_ops.make_one_shot_iterator(dataset)
     get_next = iterator.get_next if context.executing_eagerly(
     ) else functools.partial(self.evaluate, iterator.get_next())
-    checkpoint = checkpointable_utils.Checkpoint(iterator=iterator)
+    checkpoint = trackable_utils.Checkpoint(iterator=iterator)
     self.assertAllEqual(0, get_next())
     self.assertAllEqual(1, get_next())
     save_path = checkpoint.save(checkpoint_prefix)
@@ -113,9 +113,9 @@ class IteratorCheckpointingTest(test_base.DatasetTestBase):
     checkpoint_prefix = os.path.join(checkpoint_directory, "ckpt")
     dataset = dataset_ops.Dataset.range(10)
     iterator = iter(dataset) if context.executing_eagerly(
-    ) else dataset.make_initializable_iterator()
+    ) else dataset_ops.make_initializable_iterator(dataset)
     get_next = iterator.get_next
-    checkpoint = checkpointable_utils.Checkpoint(iterator=iterator)
+    checkpoint = trackable_utils.Checkpoint(iterator=iterator)
     for i in range(5):
       checkpoint.restore(
           checkpoint_management.latest_checkpoint(

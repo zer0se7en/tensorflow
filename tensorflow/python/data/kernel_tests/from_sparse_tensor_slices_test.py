@@ -29,14 +29,14 @@ from tensorflow.python.ops import array_ops
 from tensorflow.python.platform import test
 
 
-@test_util.run_all_in_graph_and_eager_modes
+@test_util.run_v1_only("deprecated API, no eager or V2 test coverage")
 class FromSparseTensorSlicesTest(test_base.DatasetTestBase):
 
-  def testSkipEagerFromSparseTensorSlices(self):
+  def testFromSparseTensorSlices(self):
     """Test a dataset based on slices of a `tf.SparseTensor`."""
     st = array_ops.sparse_placeholder(dtypes.float64)
-    iterator = (dataset_ops.Dataset.from_sparse_tensor_slices(st)
-                .make_initializable_iterator())
+    iterator = dataset_ops.make_initializable_iterator(
+        dataset_ops.Dataset.from_sparse_tensor_slices(st))
     init_op = iterator.initializer
     get_next = sparse_tensor.SparseTensor(*iterator.get_next())
 

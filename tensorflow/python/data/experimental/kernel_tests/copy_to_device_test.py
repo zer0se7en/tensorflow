@@ -33,15 +33,17 @@ from tensorflow.python.platform import test
 from tensorflow.python.util import compat as util_compat
 
 
+# TODO(b/117581999): add eager coverage when supported.
 class CopyToDeviceTest(test_base.DatasetTestBase):
 
+  @test_util.run_deprecated_v1
   def testCopyToDevice(self):
     host_dataset = dataset_ops.Dataset.range(10)
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:1"))
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -55,19 +57,20 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual([], next_element.shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       for i in range(10):
         self.assertEqual(i, self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopyToDeviceInt32(self):
     host_dataset = dataset_ops.Dataset.from_tensors([0, 1, 2, 3])
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:1"))
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -81,18 +84,19 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual((4,), next_element.shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       self.assertAllEqual([0, 1, 2, 3], self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopyToSameDevice(self):
     host_dataset = dataset_ops.Dataset.range(10)
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:0"))
 
     with ops.device("/cpu:0"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -106,19 +110,20 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual([], next_element.shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       for i in range(10):
         self.assertEqual(i, self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopyToDeviceWithPrefetch(self):
     host_dataset = dataset_ops.Dataset.range(10)
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:1")).prefetch(1)
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -132,19 +137,20 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual([], next_element.shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       for i in range(10):
         self.assertEqual(i, self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopyDictToDevice(self):
     host_dataset = dataset_ops.Dataset.range(10).map(lambda x: {"a": x})
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:1"))
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -158,19 +164,20 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual([], next_element["a"].shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       for i in range(10):
         self.assertEqual({"a": i}, self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopyDictToDeviceWithPrefetch(self):
     host_dataset = dataset_ops.Dataset.range(10).map(lambda x: {"a": x})
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:1")).prefetch(1)
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -184,12 +191,13 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual([], next_element["a"].shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       for i in range(10):
         self.assertEqual({"a": i}, self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopySparseTensorsToDevice(self):
 
     def make_tensor(i):
@@ -202,7 +210,7 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/cpu:1"))
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -215,7 +223,7 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual(dtypes.int64, next_element.dtype)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       for i in range(10):
         actual = self.evaluate(next_element)
         self.assertAllEqual([i], actual.values)
@@ -224,6 +232,7 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopySparseTensorsToDeviceWithPrefetch(self):
 
     def make_tensor(i):
@@ -236,7 +245,7 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/cpu:1")).prefetch(1)
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -249,7 +258,7 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual(dtypes.int64, next_element.dtype)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       for i in range(10):
         actual = self.evaluate(next_element)
         self.assertAllEqual([i], actual.values)
@@ -267,10 +276,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0"))
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       for i in range(10):
         self.assertEqual(i, self.evaluate(next_element))
@@ -286,10 +296,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0")).prefetch(1)
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       for i in range(10):
         self.assertEqual(i, self.evaluate(next_element))
@@ -319,10 +330,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     device_dataset = device_dataset.with_options(options)
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       for i in range(10):
         x, y, z = self.evaluate(next_element)
@@ -341,10 +353,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0"))
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       self.assertAllEqual([0, 1, 2, 3], self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
@@ -359,10 +372,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0")).prefetch(1)
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       self.assertAllEqual([0, 1, 2, 3], self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
@@ -377,10 +391,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0"))
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       self.assertAllEqual([b"a", b"b", b"c"], self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
@@ -395,10 +410,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0"))
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       self.assertAllEqual([b"a", b"b", b"c"], self.evaluate(next_element))
       with self.assertRaises(errors.OutOfRangeError):
@@ -416,23 +432,25 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
           prefetching_ops.copy_to_device("/cpu:0", source_device="/gpu:0"))
 
       with ops.device("/cpu:0"):
-        iterator = back_to_cpu_dataset.make_initializable_iterator()
+        iterator = dataset_ops.make_initializable_iterator(back_to_cpu_dataset)
         next_element = iterator.get_next()
 
-      with self.cached_session() as sess:
+      with self.cached_session(
+          config=config_pb2.ConfigProto(allow_soft_placement=False)):
         self.evaluate(iterator.initializer)
         for i in range(10):
           self.assertEqual(i, self.evaluate(next_element))
         with self.assertRaises(errors.OutOfRangeError):
           self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopyToDeviceWithReInit(self):
     host_dataset = dataset_ops.Dataset.range(10)
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:1"))
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -446,7 +464,7 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual([], next_element.shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       self.evaluate(iterator.initializer)
       for i in range(5):
         self.assertEqual(i, self.evaluate(next_element))
@@ -456,13 +474,14 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
       with self.assertRaises(errors.OutOfRangeError):
         self.evaluate(next_element)
 
+  @test_util.run_deprecated_v1
   def testCopyToDeviceWithReInitAndPrefetch(self):
     host_dataset = dataset_ops.Dataset.range(10)
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/cpu:1")).prefetch(1)
 
     with ops.device("/cpu:1"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
     self.assertEqual(host_dataset.output_types, device_dataset.output_types)
@@ -476,7 +495,7 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     self.assertEqual([], next_element.shape)
 
     worker_config = config_pb2.ConfigProto(device_count={"CPU": 2})
-    with self.test_session(config=worker_config) as sess:
+    with self.test_session(config=worker_config):
       self.evaluate(iterator.initializer)
       for i in range(5):
         self.assertEqual(i, self.evaluate(next_element))
@@ -495,10 +514,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0"))
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       for i in range(5):
         self.assertEqual(i, self.evaluate(next_element))
@@ -517,10 +537,11 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
         prefetching_ops.copy_to_device("/gpu:0")).prefetch(1)
 
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_element = iterator.get_next()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       self.evaluate(iterator.initializer)
       for i in range(5):
         self.assertEqual(i, self.evaluate(next_element))
@@ -538,12 +559,13 @@ class CopyToDeviceTest(test_base.DatasetTestBase):
     device_dataset = host_dataset.apply(
         prefetching_ops.copy_to_device("/gpu:0"))
     with ops.device("/gpu:0"):
-      iterator = device_dataset.make_initializable_iterator()
+      iterator = dataset_ops.make_initializable_iterator(device_dataset)
       next_elem = iterator_ops.get_next_as_optional(iterator)
       elem_has_value_t = next_elem.has_value()
       elem_value_t = next_elem.get_value()
 
-    with self.cached_session() as sess:
+    with self.cached_session(
+        config=config_pb2.ConfigProto(allow_soft_placement=False)):
       # Before initializing the iterator, evaluating the optional fails with
       # a FailedPreconditionError.
       with self.assertRaises(errors.FailedPreconditionError):

@@ -34,6 +34,7 @@ from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import errors
 from tensorflow.python.framework import meta_graph
 from tensorflow.python.framework import ops
+from tensorflow.python.framework import test_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
 from tensorflow.python.ops import state_ops
@@ -91,10 +92,12 @@ class MockCheckpointSaverListener(
 
 class SecondOrStepTimerTest(test.TestCase):
 
+  @test_util.run_deprecated_v1
   def test_raise_in_both_secs_and_steps(self):
     with self.assertRaises(ValueError):
       basic_session_run_hooks.SecondOrStepTimer(every_secs=2.0, every_steps=10)
 
+  @test_util.run_deprecated_v1
   def test_raise_in_none_secs_and_steps(self):
     with self.assertRaises(ValueError):
       basic_session_run_hooks.SecondOrStepTimer()
@@ -413,11 +416,13 @@ class CheckpointSaverHookTest(test.TestCase):
       basic_session_run_hooks.CheckpointSaverHook(
           self.model_dir, saver=self.scaffold.saver, scaffold=self.scaffold)
 
+  @test_util.run_deprecated_v1
   def test_raise_in_both_secs_and_steps(self):
     with self.assertRaises(ValueError):
       basic_session_run_hooks.CheckpointSaverHook(
           self.model_dir, save_secs=10, save_steps=20)
 
+  @test_util.run_deprecated_v1
   def test_raise_in_none_secs_and_steps(self):
     with self.assertRaises(ValueError):
       basic_session_run_hooks.CheckpointSaverHook(self.model_dir)
@@ -1117,6 +1122,7 @@ class StepCounterHookTest(test.TestCase):
         self.assertGreater(summary_value.simple_value, 0)
 
 
+@test_util.run_deprecated_v1
 class SummarySaverHookTest(test.TestCase):
 
   def setUp(self):
@@ -1365,7 +1371,7 @@ class FinalOpsHookTest(test.TestCase):
   def test_final_ops_triggers_out_of_range_error(self):
     with ops.Graph().as_default():
       dataset = dataset_ops.Dataset.range(1)
-      iterator = dataset.make_one_shot_iterator()
+      iterator = dataset_ops.make_one_shot_iterator(dataset)
       read_ops = iterator.get_next()
       final_ops = read_ops
 
@@ -1398,6 +1404,7 @@ class FinalOpsHookTest(test.TestCase):
                              hook.final_ops_values.tolist())
 
 
+@test_util.run_deprecated_v1
 class ResourceSummarySaverHookTest(test.TestCase):
 
   def setUp(self):
@@ -1478,10 +1485,12 @@ class ProfilerHookTest(test.TestCase):
   def _count_timeline_files(self):
     return len(gfile.Glob(self.filepattern))
 
+  @test_util.run_deprecated_v1
   def test_raise_in_both_secs_and_steps(self):
     with self.assertRaises(ValueError):
       basic_session_run_hooks.ProfilerHook(save_secs=10, save_steps=20)
 
+  @test_util.run_deprecated_v1
   def test_raise_in_none_secs_and_steps(self):
     with self.assertRaises(ValueError):
       basic_session_run_hooks.ProfilerHook(save_secs=None, save_steps=None)

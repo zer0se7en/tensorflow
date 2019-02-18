@@ -33,7 +33,7 @@ except ImportError:
   from distutils.spawn import find_executable as which
 # pylint: enable=g-import-not-at-top
 
-_DEFAULT_CUDA_VERSION = '9.0'
+_DEFAULT_CUDA_VERSION = '10.0'
 _DEFAULT_CUDNN_VERSION = '7'
 _DEFAULT_CUDA_COMPUTE_CAPABILITIES = '3.5,7.0'
 _DEFAULT_CUDA_PATH = '/usr/local/cuda'
@@ -53,6 +53,12 @@ _TF_BAZELRC = ''
 
 NCCL_LIB_PATHS = [
     'lib64/', 'lib/powerpc64le-linux-gnu/', 'lib/x86_64-linux-gnu/', ''
+]
+
+# List of files to be configured for using Bazel on Apple platforms.
+APPLE_BAZEL_FILES = [
+    'tensorflow/lite/experimental/objc/BUILD',
+    'tensorflow/lite/experimental/swift/BUILD'
 ]
 
 if platform.machine() == 'ppc64le':
@@ -255,18 +261,7 @@ def setup_python(environ_cp):
 def reset_tf_configure_bazelrc():
   """Reset file that contains customized config settings."""
   open(_TF_BAZELRC, 'w').close()
-  bazelrc_path = os.path.join(_TF_WORKSPACE_ROOT, '.bazelrc')
 
-  data = []
-  if os.path.exists(bazelrc_path):
-    with open(bazelrc_path, 'r') as f:
-      data = f.read().splitlines()
-  with open(bazelrc_path, 'w') as f:
-    for l in data:
-      if _TF_BAZELRC_FILENAME in l:
-        continue
-      f.write('%s\n' % l)
-    f.write('import %%workspace%%/%s\n' % _TF_BAZELRC_FILENAME)
 
 def cleanup_makefile():
   """Delete any leftover BUILD files from the Makefile build.
@@ -452,11 +447,12 @@ def convert_version_to_int(version):
   return int(version_str)
 
 
-def check_bazel_version(min_version):
-  """Check installed bazel version is at least min_version.
+def check_bazel_version(min_version, max_version):
+  """Check installed bazel version is between min_version and max_version.
 
   Args:
     min_version: string for minimum bazel version.
+    max_version: string for maximum bazel version.
 
   Returns:
     The bazel version detected.
@@ -474,6 +470,7 @@ def check_bazel_version(min_version):
 
   min_version_int = convert_version_to_int(min_version)
   curr_version_int = convert_version_to_int(curr_version)
+  max_version_int = convert_version_to_int(max_version)
 
   # Check if current bazel version can be detected properly.
   if not curr_version_int:
@@ -486,7 +483,14 @@ def check_bazel_version(min_version):
   if curr_version_int < min_version_int:
     print('Please upgrade your bazel installation to version %s or higher to '
           'build TensorFlow!' % min_version)
-    sys.exit(0)
+    sys.exit(1)
+  if (curr_version_int > max_version_int and
+      'TF_IGNORE_MAX_BAZEL_VERSION' not in os.environ):
+    print('Please downgrade your bazel installation to version %s or lower to '
+          'build TensorFlow! To downgrade: download the installer for the old '
+          'version (from https://github.com/bazelbuild/bazel/releases) then '
+          'run the installer.' % max_version)
+    sys.exit(1)
   return curr_version
 
 
@@ -788,8 +792,7 @@ def set_gcc_host_compiler_path(environ_cp):
       environ_cp,
       var_name='GCC_HOST_COMPILER_PATH',
       var_default=default_gcc_host_compiler_path,
-      ask_for_var=
-      'Please specify which gcc should be used by nvcc as the host compiler.',
+      ask_for_var='Please specify which gcc should be used by nvcc as the host compiler.',
       check_success=os.path.exists,
       error_msg='Invalid gcc path. %s cannot be found.',
   )
@@ -1240,6 +1243,7 @@ def set_tf_nccl_install_path(environ_cp):
   environ_cp['TF_NCCL_VERSION'] = tf_nccl_version
   write_action_env_to_bazelrc('TF_NCCL_VERSION', tf_nccl_version)
 
+
 def get_native_cuda_compute_capabilities(environ_cp):
   """Get native cuda compute capabilities.
 
@@ -1485,7 +1489,7 @@ def set_other_mpi_vars(environ_cp):
   else:
     raise ValueError(
         'Cannot find the MPI library file in %s/lib or %s/lib64 or %s/lib32' %
-        mpi_home, mpi_home, mpi_home)
+        (mpi_home, mpi_home, mpi_home))
 
 
 def set_system_libs_flag(environ_cp):
@@ -1516,10 +1520,6 @@ def set_windows_build_flags(environ_cp):
   # The host and target platforms are the same in Windows build. So we don't
   # have to distinct them. This avoids building the same targets twice.
   write_to_bazelrc('build --distinct_host_configuration=false')
-  # Enable short object file path to avoid long path issue on Windows.
-  # TODO(pcloudy): Remove this flag when upgrading Bazel to 0.16.0
-  # Short object file path will be enabled by default.
-  write_to_bazelrc('build --experimental_shortened_obj_file_path=true')
 
   if get_var(
       environ_cp, 'TF_OVERRIDE_EIGEN_STRONG_INLINE', 'Eigen strong inline',
@@ -1538,6 +1538,23 @@ def set_windows_build_flags(environ_cp):
 def config_info_line(name, help_text):
   """Helper function to print formatted help text for Bazel config options."""
   print('\t--config=%-12s\t# %s' % (name, help_text))
+
+
+def configure_apple_bazel_rules():
+  """Configures Bazel rules for building on Apple platforms.
+
+  Enables analyzing and building Apple Bazel rules on Apple platforms. This
+  function will only be executed if `is_macos()` is true.
+  """
+  if not is_macos():
+    return
+  for filepath in APPLE_BAZEL_FILES:
+    print(
+        'Configuring %s file to analyze and build Bazel rules on Apple platforms.'
+        % filepath)
+    existing_filepath = os.path.join(_TF_WORKSPACE_ROOT, filepath + '.apple')
+    renamed_filepath = os.path.join(_TF_WORKSPACE_ROOT, filepath)
+    os.rename(existing_filepath, renamed_filepath)
 
 
 def main():
@@ -1559,11 +1576,9 @@ def main():
   # environment variables.
   environ_cp = dict(os.environ)
 
-  check_bazel_version('0.15.0')
+  check_bazel_version('0.19.0', '0.22.0')
 
   reset_tf_configure_bazelrc()
-  # Explicitly import tools/bazel.rc, this is needed for Bazel 0.19.0 or later
-  write_to_bazelrc('import %workspace%/tools/bazel.rc')
 
   cleanup_makefile()
   setup_python(environ_cp)
@@ -1582,6 +1597,8 @@ def main():
 
   if is_macos():
     environ_cp['TF_NEED_TENSORRT'] = '0'
+  else:
+    environ_cp['TF_CONFIGURE_APPLE_BAZEL_RULES'] = '0'
 
   # The numpy package on ppc64le uses OpenBLAS which has multi-threading
   # issues that lead to incorrect answers.  Set OMP_NUM_THREADS=1 at
@@ -1684,6 +1701,14 @@ def main():
     create_android_ndk_rule(environ_cp)
     create_android_sdk_rule(environ_cp)
 
+  if get_var(
+      environ_cp, 'TF_CONFIGURE_APPLE_BAZEL_RULES',
+      'Configure Bazel rules for Apple platforms', False,
+      ('Would you like to configure Bazel rules for building on Apple platforms?'
+      ), 'Configuring Bazel rules for Apple platforms.',
+      'Not configuring Bazel rules for Apple platforms.'):
+    configure_apple_bazel_rules()
+
   print('Preconfigured Bazel build configs. You can use any of the below by '
         'adding "--config=<>" to your build command. See .bazelrc for more '
         'details.')
@@ -1692,14 +1717,15 @@ def main():
   config_info_line('gdr', 'Build with GDR support.')
   config_info_line('verbs', 'Build with libverbs support.')
   config_info_line('ngraph', 'Build with Intel nGraph support.')
-  config_info_line('dynamic_kernels',
-                   '(Experimental) Build kernels into separate shared objects.')
+  config_info_line(
+      'dynamic_kernels',
+      '(Experimental) Build kernels into separate shared objects.')
 
   print('Preconfigured Bazel build configs to DISABLE default on features:')
   config_info_line('noaws', 'Disable AWS S3 filesystem support.')
   config_info_line('nogcp', 'Disable GCP support.')
   config_info_line('nohdfs', 'Disable HDFS support.')
-  config_info_line('noignite', 'Disable Apacha Ignite support.')
+  config_info_line('noignite', 'Disable Apache Ignite support.')
   config_info_line('nokafka', 'Disable Apache Kafka support.')
   config_info_line('nonccl', 'Disable NVIDIA NCCL support.')
 

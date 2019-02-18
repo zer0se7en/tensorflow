@@ -60,15 +60,16 @@ class FlatMapTest(test_base.DatasetTestBase):
     self.assertDatasetProduces(dataset, expected_output=expected_output)
 
   # Note: no eager mode coverage, session specific test.
+  @test_util.run_deprecated_v1
   def testSkipEagerSharedResourceNestedFlatMapDataset(self):
     repeats = [[1, 2], [3, 4], [5, 0], [1, 7]]
     components = np.array(repeats, dtype=np.int64)
     iterator = (
-        dataset_ops.Dataset.from_tensor_slices(components)
-        .flat_map(lambda x: dataset_ops.Dataset.from_tensor_slices(x)
-                  .flat_map(lambda y: dataset_ops.Dataset.from_tensors(y)
-                            .repeat(y))).make_initializable_iterator(
-                                shared_name="shared_flat_map_iterator"))
+        dataset_ops.make_initializable_iterator(
+            dataset_ops.Dataset.from_tensor_slices(components).flat_map(
+                lambda x: dataset_ops.Dataset.from_tensor_slices(x).flat_map(
+                    lambda y: dataset_ops.Dataset.from_tensors(y).repeat(y))),
+            shared_name="shared_flat_map_iterator"))
     init_op = iterator.initializer
     get_next = iterator.get_next()
 
