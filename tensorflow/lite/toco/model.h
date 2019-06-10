@@ -82,6 +82,7 @@ enum class OperatorType : uint8 {
   kTransposeConv,
   kCast,
   kFloor,
+  kRound,
   kGather,
   kResizeBilinear,
   kSin,
@@ -166,7 +167,11 @@ enum class OperatorType : uint8 {
   kReverseV2,
   kBidirectionalSequenceRnn,
   kGatherNd,
-  kWhere
+  kWhere,
+  kElu,
+  kReverseSequence,
+  kMatrixDiag,
+  kMatrixSetDiag
 };
 
 // Helper to deal with TensorFlow arrays using a different ordering of
@@ -218,6 +223,7 @@ enum class ArrayDataType : uint8 {
   kUint64,  // 10
   kString,
   kComplex64,
+  kFloat16,
 };
 
 // Compile-time logic to map ArrayDataType to the corresponding C++ scalar type
@@ -690,6 +696,17 @@ struct AbsOperator : Operator {
   AbsOperator() : Operator(OperatorType::kAbs) {}
 };
 
+// Elu
+//   f(x) -> exp(x) - 1 for x < 0, x for x >= 0.
+//
+// Inputs:
+//   inputs[0]: required: the input array
+//
+// TensorFlow equivalent: Elu
+struct EluOperator : Operator {
+  EluOperator() : Operator(OperatorType::kElu) {}
+};
+
 // Element-wise Relu operator:
 //   x -> max(0, x)
 //
@@ -956,9 +973,8 @@ struct TensorFlowIdentityOperator : Operator {
   TensorFlowIdentityOperator() : Operator(OperatorType::kIdentity) {}
 };
 
-// Batch matrix multiplication operator. This comes from the (deprecated)
-// tf.batch_matmul or a tf.matmul that has rank 3. dims(0) is the batch count
-// and it can be trivially unrolled into a series of matmuls on each element.
+// Batch matrix multiplication operator. This comes from a tf.matmul where one
+// of the operands has rank 3 or more.
 //
 // Inputs:
 //   inputs[0]: required: the left-hand side matrix
@@ -1113,6 +1129,7 @@ struct StridedSliceOperator : Operator {
 //
 // Inputs:
 //   inputs[0]: required: the input array
+//   inputs[1]: optional: the output tensor shape
 //
 // TensorFlow equivalent: Reshape --- except that we only support a special case
 // here, where the output shape is a matrix (2D) shape.
@@ -1701,6 +1718,16 @@ struct CeilOperator : Operator {
   CeilOperator() : Operator(OperatorType::kCeil) {}
 };
 
+// Round operator.
+//
+// Inputs:
+//   inputs[0]: required: the input array
+//
+// TensorFlow equivalent: Round
+struct RoundOperator : Operator {
+  RoundOperator() : Operator(OperatorType::kRound) {}
+};
+
 // Gather operator. It gathers slices from params according to indices.
 // Only 1-D indices are supported at the moment.
 //
@@ -2019,6 +2046,19 @@ struct MirrorPadOperator : Operator {
   MirrorPadMode mode;
 };
 
+// ReverseSequence operator:
+//
+// Inputs:
+// Inputs[0]: required: the input array.
+// Inputs[1]: required: the lengths of the elements to be reversed.
+//
+// TensorFlow equivalent: tf.reverse_sequence.
+struct ReverseSequenceOperator : Operator {
+  ReverseSequenceOperator() : Operator(OperatorType::kReverseSequence) {}
+  int seq_dim;
+  int batch_dim = 0;
+};
+
 // Unique Operator:
 //
 // Inputs:
@@ -2047,6 +2087,24 @@ struct UnidirectionalSequenceRnnOperator : Operator {
 //  TensorFlow equivalent: Where
 struct WhereOperator : Operator {
   WhereOperator() : Operator(OperatorType::kWhere) {}
+};
+
+// Matrix Diag Operator:
+// Construct a batched diagonal tensor with given batched diagonal values.
+// Inputs: A tensor of values that will be on the diagonal of the returned
+//         tensor.
+struct MatrixDiagOperator : Operator {
+  MatrixDiagOperator() : Operator(OperatorType::kMatrixDiag) {}
+};
+
+// Matrix Set Diag Operator:
+// Construct a batched diagonal tensor with given input and diagonal values.
+// Input is a rank (k+1) tensor of values.
+// diagonal is a rank (k) tensor of values that will be on the diagonal
+// of the returned output. Output is rank k+1.
+//         tensor.
+struct MatrixSetDiagOperator : Operator {
+  MatrixSetDiagOperator() : Operator(OperatorType::kMatrixSetDiag) {}
 };
 
 // Alloc's are used for transient arrays only. An Alloc specifies which interval
@@ -2277,6 +2335,14 @@ class Model {
 
   int64 ArithmeticOpsCount() const { return ops_count; }
 
+  void AddInvalidInputArray(string invalid_input_array) {
+    invalid_input_arrays_.insert(invalid_input_array);
+  }
+
+  const std::unordered_set<string>& GetInvalidInputArrays() const {
+    return invalid_input_arrays_;
+  }
+
   // Optional arrays are used for optional tensors,
   // these tensors do not have data, but with reserved names as op inputs.
   std::set<string> optional_arrays;
@@ -2303,6 +2369,9 @@ class Model {
   // The Operator's refer to these Array's by their name strings, not by their
   // addresses. See Operator::inputs, Operator::outputs.
   std::unordered_map<string, std::unique_ptr<Array>> arrays;
+
+  // Invalid input arrays.
+  std::unordered_set<string> invalid_input_arrays_;
 };
 
 // OperatorSignature contains the information required to making versioning

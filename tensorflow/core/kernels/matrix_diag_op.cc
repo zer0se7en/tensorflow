@@ -17,9 +17,9 @@ limitations under the License.
 
 #define EIGEN_USE_THREADS
 
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 #define EIGEN_USE_GPU
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #include "tensorflow/core/kernels/matrix_diag_op.h"
 
@@ -62,8 +62,8 @@ class MatrixDiagPartOp : public OpKernel {
     for (int i = 0; i < rank - 2; ++i) {
       output_shape.AddDim(input_shape.dim_size(i));
     }
-    const int64 min_dim = std::min(input_shape.dim_size(rank - 2),
-                                   input_shape.dim_size(rank - 1));
+    const Eigen::Index min_dim = std::min(input_shape.dim_size(rank - 2),
+                                          input_shape.dim_size(rank - 1));
     output_shape.AddDim(min_dim);
 
     Tensor* output = nullptr;
@@ -97,7 +97,7 @@ class MatrixDiagOp : public OpKernel {
                     "input must be at least 1-dim, received shape: ",
                     input.shape().DebugString()));
 
-    const int64 k = input_shape.dim_size(rank - 1);
+    const Eigen::Index k = input_shape.dim_size(rank - 1);
     auto input_reshaped = input.flat_inner_dims<T, 2>();
 
     TensorShape output_shape = input_shape;
@@ -147,8 +147,8 @@ struct MatrixDiag<CPUDevice, T> {
                       typename TTypes<T, 2>::ConstTensor input,
                       typename TTypes<T, 3>::Tensor output) {
     output.device(d) = output.constant(T());
-    for (int64 r = 0; r < output.dimension(0); ++r) {
-      for (int64 d = 0; d < output.dimension(1); ++d) {
+    for (Eigen::Index r = 0; r < output.dimension(0); ++r) {
+      for (Eigen::Index d = 0; d < output.dimension(1); ++d) {
         output(r, d, d) = input(r, d);
       }
     }
@@ -160,8 +160,8 @@ struct MatrixDiagPart<CPUDevice, T> {
   static void Compute(const CPUDevice& d,
                       typename TTypes<T, 3>::ConstTensor input,
                       typename TTypes<T, 2>::Tensor output) {
-    for (int64 r = 0; r < output.dimension(0); ++r) {
-      for (int64 d = 0; d < output.dimension(1); ++d) {
+    for (Eigen::Index r = 0; r < output.dimension(0); ++r) {
+      for (Eigen::Index d = 0; d < output.dimension(1); ++d) {
         output(r, d) = input(r, d, d);
       }
     }
@@ -170,7 +170,7 @@ struct MatrixDiagPart<CPUDevice, T> {
 
 }  // namespace functor
 
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 // Forward declarations of the functor specializations for GPU.
 namespace functor {
@@ -220,6 +220,6 @@ TF_CALL_complex128(REGISTER_MATRIX_DIAG_GPU);
 TF_CALL_GPU_NUMBER_TYPES(REGISTER_BATCH_MATRIX_DIAG_GPU);
 #undef REGISTER_BATCH_MATRIX_DIAG_GPU
 
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 }  // namespace tensorflow

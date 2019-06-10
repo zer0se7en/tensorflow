@@ -75,6 +75,7 @@ static const char* param_structs[] = {"TfLiteAddParams",
                                       "TfLiteUnidirectionalSequenceLSTMParams",
                                       "TfLiteUniqueParams",
                                       "TfLiteUnpackParams",
+                                      "TfLiteReverseSequenceParams",
                                       nullptr};
 }  // namespace
 
@@ -173,12 +174,15 @@ class OpOptionData {
     op_to_option_["RELU"] = "";
     op_to_option_["RELU_N1_TO_1"] = "";
     op_to_option_["RELU6"] = "";
+    op_to_option_["ROUND"] = "";
     op_to_option_["TANH"] = "";
     op_to_option_["PRELU"] = "";
     op_to_option_["SIN"] = "";
     op_to_option_["LOG"] = "";
     op_to_option_["SQRT"] = "";
     op_to_option_["RSQRT"] = "";
+    op_to_option_["ELU"] = "";
+    op_to_option_["REVERSE_SEQUENCE"] = "";
 
     // TODO(aselle): These are undesirable hacks. Consider changing C structs
     option_to_struct_["Pool2DOptions"] = "TfLitePoolParams";
@@ -269,10 +273,12 @@ void GenerateImportForOp(FILE* fp, const std::string& op_name,
   }
 
   fprintf(fp, "  case BuiltinOperator_%s:  {\n", op_name.c_str());
-  fprintf(fp,
-          "    const auto* params = reinterpret_cast<const "
-          "%s*>(builtin_op_data);\n",
-          struct_name.c_str());
+  if (options->num_elems != 0) {
+    fprintf(fp,
+            "    const auto* params = reinterpret_cast<const "
+            "%s*>(builtin_op_data);\n",
+            struct_name.c_str());
+  }
 
   for (size_t i = 0; i < options->num_elems; i++) {
     std::string elem_name = options->names[i];

@@ -2,20 +2,10 @@
 # TensorFlow is a computational framework, primarily for use in machine
 # learning applications.
 
-package(default_visibility = [":internal"])
-
-licenses(["notice"])  # Apache 2.0
-
-exports_files([
-    "LICENSE",
-    "ACKNOWLEDGMENTS",
-    # The leakr files are used by //third_party/cloud_tpu.
-    "leakr_badwords.dic",
-    "leakr_badfiles.dic",
-    "leakr_file_type_recipe.ftrcp",
-])
-
+load("//tensorflow:tensorflow.bzl", "VERSION")
 load("//tensorflow:tensorflow.bzl", "tf_cc_shared_object")
+load("//tensorflow:tensorflow.bzl", "tf_custom_op_library_additional_deps_impl")
+load("//tensorflow:tensorflow.bzl", "tf_native_cc_binary")
 load(
     "//tensorflow/core:platform/default/build_config.bzl",
     "tf_additional_binary_deps",
@@ -37,6 +27,24 @@ load(
     "//third_party/ngraph:build_defs.bzl",
     "if_ngraph",
 )
+load(
+    "//third_party/mkl:build_defs.bzl",
+    "if_mkl_ml",
+)
+
+package(
+    default_visibility = [":internal"],
+    licenses = ["notice"],  # Apache 2.0
+)
+
+exports_files([
+    "LICENSE",
+    "ACKNOWLEDGMENTS",
+    # The leakr files are used by //third_party/cloud_tpu.
+    "leakr_badwords.dic",
+    "leakr_badfiles.dic",
+    "leakr_file_type_recipe.ftrcp",
+])
 
 # @unused
 TENSORFLOW_API_INIT_FILES_V2 = (
@@ -146,12 +154,6 @@ config_setting(
 )
 
 config_setting(
-    name = "darwin",
-    values = {"cpu": "darwin"},
-    visibility = ["//visibility:public"],
-)
-
-config_setting(
     name = "windows",
     values = {"cpu": "x64_windows"},
     visibility = ["//visibility:public"],
@@ -164,8 +166,17 @@ config_setting(
 )
 
 config_setting(
+    name = "macos",
+    values = {
+        "apple_platform_type": "macos",
+        "cpu": "darwin",
+    },
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
     name = "ios",
-    values = {"crosstool_top": "//tools/osx/crosstool:crosstool"},
+    values = {"apple_platform_type": "ios"},
     visibility = ["//visibility:public"],
 )
 
@@ -175,6 +186,12 @@ config_setting(
         "crosstool_top": "//tools/osx/crosstool:crosstool",
         "cpu": "ios_x86_64",
     },
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "linux_aarch64",
+    values = {"cpu": "aarch64"},
     visibility = ["//visibility:public"],
 )
 
@@ -304,12 +321,30 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+config_setting(
+    name = "with_numa_support",
+    define_values = {"with_numa_support": "true"},
+    visibility = ["//visibility:public"],
+)
+
 # Crosses between framework_shared_object and a bunch of other configurations
 # due to limitations in nested select() statements.
 config_setting(
     name = "framework_shared_object",
     define_values = {
         "framework_shared_object": "true",
+    },
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "macos_with_framework_shared_object",
+    define_values = {
+        "framework_shared_object": "true",
+    },
+    values = {
+        "apple_platform_type": "macos",
+        "cpu": "darwin",
     },
     visibility = ["//visibility:public"],
 )
@@ -396,14 +431,15 @@ config_setting(
     values = {"cpu": "x64_windows"},
 )
 
+# DO NOT ADD ANY NEW EXCEPTIONS TO THIS LIST!
+# Instead, please use public APIs or public build rules TF provides.
+# If you need functionality that is not exposed, we will work with you to expand our public APIs.
 package_group(
     name = "internal",
-    packages = ["//tensorflow/..."],
-)
-
-load(
-    "//third_party/mkl:build_defs.bzl",
-    "if_mkl_ml",
+    packages = [
+        "//tensorflow/...",
+        "//tensorflow_estimator/python/estimator/...",
+    ],
 )
 
 filegroup(
@@ -455,19 +491,54 @@ cc_library(
 # global symbol table in order to support op registration. This means that
 # projects building with Bazel and importing TensorFlow as a dependency will not
 # depend on libtensorflow_framework.so unless they opt in.
+#
+# DEBUGGING DUPLICATE INITIALIZATION
+# ----------------------------------
+#
+# Having a dynamic library introduces a diamond dependency problem:
+# if a target X is depended on by both libtensorflow_framework.so and the
+# users of libtensorflow_framework.so, the definitions will get duplicated.
+# This causes global initializers which need to be run exactly once (e.g.
+# protobuf registration) to crash, as the initialization is run once from the
+# statically linked in global, and one by the global which comes in from
+# libtensorflow_framework.so.
+# Even worse, global objects which need to be singletons for semantical
+# correctness (e.g. registers) might get dupliacted.
+#
+# In order to avoid these HARD TO DEBUG CRASHES, it is sufficient to follow
+# these rules:
+#  - All globals with non-trivial static constructors or for which a
+#    single identity is required (e.g. registers) need to live in `*_impl`
+#    targets.
+#
+#  - An `*_impl` target has to be (transitively) included into
+#    `libtensorflow_framework.so`.
+#
+#  - A target T1 can depend on `*_impl` target T2 only if:
+#
+#    -> It's a tf_cc_shared_object, and there is no other tf_cc_shared_object
+#       transitively depending on T2.
+#    -> It's an `*_impl` target by itself
+#    -> The dependency is guarded by `if_static`. This is discouraged,
+#       as it diverges dependency topology between static and dynamic TF.
+#
+# TODO(cheshire): write tests to check for rule violations
 tf_cc_shared_object(
-    name = "libtensorflow_framework.so",
+    name = "tensorflow_framework",
     framework_so = [],
     linkopts = select({
-        "//tensorflow:darwin": [],
+        "//tensorflow:macos": [],
         "//tensorflow:windows": [],
         "//conditions:default": [
             "-Wl,--version-script,$(location //tensorflow:tf_framework_version_script.lds)",
         ],
     }),
     linkstatic = 1,
+    per_os_targets = True,
+    soversion = VERSION,
     visibility = ["//visibility:public"],
     deps = [
+        "//tensorflow/cc/saved_model:loader_lite_impl",
         "//tensorflow/core:core_cpu_impl",
         "//tensorflow/core:framework_internal_impl",
         "//tensorflow/core:gpu_runtime_impl",
@@ -493,19 +564,27 @@ tf_cc_shared_object(
 # symbols in object files.
 
 tf_cc_shared_object(
-    name = "libtensorflow.so",
+    name = "tensorflow",
     linkopts = select({
-        "//tensorflow:darwin": [
+        "//tensorflow:macos": [
             "-Wl,-exported_symbols_list,$(location //tensorflow/c:exported_symbols.lds)",
-            "-Wl,-install_name,@rpath/libtensorflow.so",
         ],
-        "//tensorflow:windows": [],
+        "//tensorflow:windows": [
+        ],
         "//conditions:default": [
             "-z defs",
             "-Wl,--version-script,$(location //tensorflow/c:version_script.lds)",
         ],
     }),
+    per_os_targets = True,
+    soversion = VERSION,
     visibility = ["//visibility:public"],
+    # add win_def_file for tensorflow
+    win_def_file = select({
+        # We need this DEF file to properly export symbols on Windows
+        "//tensorflow:windows": ":tensorflow_filtered_def_file",
+        "//conditions:default": None,
+    }),
     deps = [
         "//tensorflow/c:c_api",
         "//tensorflow/c:c_api_experimental",
@@ -517,9 +596,9 @@ tf_cc_shared_object(
 )
 
 tf_cc_shared_object(
-    name = "libtensorflow_cc.so",
+    name = "tensorflow_cc",
     linkopts = select({
-        "//tensorflow:darwin": [
+        "//tensorflow:macos": [
             "-Wl,-exported_symbols_list,$(location //tensorflow:tf_exported_symbols.lds)",
         ],
         "//tensorflow:windows": [],
@@ -528,7 +607,15 @@ tf_cc_shared_object(
             "-Wl,--version-script,$(location //tensorflow:tf_version_script.lds)",
         ],
     }),
+    per_os_targets = True,
+    soversion = VERSION,
     visibility = ["//visibility:public"],
+    # add win_def_file for tensorflow_cc
+    win_def_file = select({
+        # We need this DEF file to properly export symbols on Windows
+        "//tensorflow:windows": ":tensorflow_filtered_def_file",
+        "//conditions:default": None,
+    }),
     deps = [
         "//tensorflow:tf_exported_symbols.lds",
         "//tensorflow:tf_version_script.lds",
@@ -541,6 +628,92 @@ tf_cc_shared_object(
         "//tensorflow/core:tensorflow",
     ] + if_ngraph(["@ngraph_tf//:ngraph_tf"]),
 )
+
+# ** Targets for Windows build (start) **
+
+# Build a shared library (DLL) by cc_binary from tf_custom_op_library_additional_deps_impl,
+# it contains all object code from its dependencies.
+# This target is only used for parsing the symbols to be exported in tensorflow.dll.
+# Do NOT depend on it.
+tf_native_cc_binary(
+    name = "tf_custom_op_library_additional_deps.dll",
+    linkshared = 1,
+    linkstatic = 1,
+    deps = tf_custom_op_library_additional_deps_impl(),
+)
+
+# Get a DEF file generated by parsing all object files
+# of tf_custom_op_library_additional_deps.so
+filegroup(
+    name = "tensorflow_def_file",
+    srcs = [":tf_custom_op_library_additional_deps.dll"],
+    output_group = "def_file",
+)
+
+# Filter the DEF file to reduce the number of symbols to 64K or less.
+# Note that we also write the name of the pyd file into DEF file so that
+# the dynamic libraries of custom ops can find it at runtime.
+genrule(
+    name = "tensorflow_filtered_def_file",
+    srcs = [":tensorflow_def_file"],
+    outs = ["tensorflow_filtered_def_file.def"],
+    cmd = select({
+        "//tensorflow:windows": """
+              $(location @local_config_def_file_filter//:def_file_filter) \\
+              --input $(location :tensorflow_def_file) \\
+              --output $@
+          """,
+        "//conditions:default": "touch $@",  # Just a placeholder for Unix platforms
+    }),
+    tools = ["@local_config_def_file_filter//:def_file_filter"],
+    visibility = ["//visibility:public"],
+)
+
+# The interface library (tensorflow.dll.if.lib) for linking tensorflow DLL library (tensorflow.dll) on Windows.
+# To learn more about import library (called interface library in Bazel):
+#     https://docs.microsoft.com/en-us/cpp/build/linking-an-executable-to-a-dll?view=vs-2017#linking-implicitly
+filegroup(
+    name = "get_tensorflow_dll_import_lib",
+    srcs = ["//tensorflow:tensorflow.dll"],
+    output_group = "interface_library",
+    visibility = ["//visibility:public"],
+)
+
+# Rename the import library for tensorflow.dll from tensorflow.dll.if.lib to tensorflow.lib
+genrule(
+    name = "tensorflow_dll_import_lib",
+    srcs = [":get_tensorflow_dll_import_lib"],
+    outs = ["tensorflow.lib"],
+    cmd = select({
+        "//tensorflow:windows": "cp -f $< $@",
+        "//conditions:default": "touch $@",  # Just a placeholder for Unix platforms
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# The interface library (tensorflow_cc.dll.if.lib) for linking tensorflow DLL library (tensorflow_cc.dll) on Windows.
+# To learn more about import library (called interface library in Bazel):
+#     https://docs.microsoft.com/en-us/cpp/build/linking-an-executable-to-a-dll?view=vs-2017#linking-implicitly
+filegroup(
+    name = "get_tensorflow_cc_dll_import_lib",
+    srcs = ["//tensorflow:tensorflow_cc.dll"],
+    output_group = "interface_library",
+    visibility = ["//visibility:public"],
+)
+
+# Rename the import library for tensorflow.dll from tensorflow_cc.dll.if.lib to tensorflow.lib
+genrule(
+    name = "tensorflow_cc_dll_import_lib",
+    srcs = [":get_tensorflow_cc_dll_import_lib"],
+    outs = ["tensorflow_cc.lib"],
+    cmd = select({
+        "//tensorflow:windows": "cp -f $< $@",
+        "//conditions:default": "touch $@",  # Just a placeholder for Unix platforms
+    }),
+    visibility = ["//visibility:public"],
+)
+
+# ** Targets for Windows build (end) **
 
 exports_files(
     [

@@ -19,7 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 from tensorflow.core.framework import versions_pb2
-from tensorflow.python.saved_model import saved_object_graph_pb2
+from tensorflow.core.protobuf import saved_object_graph_pb2
 
 
 class VersionedTypeRegistration(object):
@@ -165,3 +165,7 @@ def deserialize(proto):
       if type_registration.should_load(proto):
         return (type_registration.from_proto(proto), type_registration.setter)
   return None
+
+
+def registered_identifiers():
+  return _REVIVED_TYPE_REGISTRY.keys()

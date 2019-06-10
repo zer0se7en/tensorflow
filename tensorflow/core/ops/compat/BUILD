@@ -4,16 +4,15 @@
 
 package(
     default_visibility = ["//visibility:private"],
+    licenses = ["notice"],  # Apache 2.0
 )
-
-licenses(["notice"])  # Apache 2.0
 
 exports_files(["LICENSE"])
 
 load(
     "//tensorflow:tensorflow.bzl",
-    "tf_cc_test",
     "tf_cc_binary",
+    "tf_cc_test",
 )
 
 cc_library(
@@ -37,6 +36,7 @@ tf_cc_test(
     data = [
         ":ops_history.v0.pbtxt",
         ":ops_history.v1.pbtxt",
+        ":ops_history.v2.pbtxt",
         "//tensorflow/core:ops/ops.pbtxt",
     ],
     deps = [

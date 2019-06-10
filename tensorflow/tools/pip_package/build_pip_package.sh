@@ -125,16 +125,20 @@ function prepare_src() {
   mkdir -p ${TMPDIR}/google
   mkdir -p ${TMPDIR}/third_party
   pushd ${RUNFILES%org_tensorflow} > /dev/null
-  for header in $(find protobuf_archive -name \*.h); do
+  for header in $(find protobuf_archive -name "*.h" -o -name "*.inc"); do
     mkdir -p "${TMPDIR}/google/$(dirname ${header})"
     cp "$header" "${TMPDIR}/google/$(dirname ${header})/"
   done
   popd > /dev/null
   cp -R $RUNFILES/third_party/eigen3 ${TMPDIR}/third_party
 
+  cp tensorflow/virtual_root.__init__.py ${TMPDIR}
   cp tensorflow/tools/pip_package/MANIFEST.in ${TMPDIR}
   cp tensorflow/tools/pip_package/README ${TMPDIR}
   cp tensorflow/tools/pip_package/setup.py ${TMPDIR}
+
+  rm -f ${TMPDIR}/tensorflow/libtensorflow_framework.so
+  rm -f ${TMPDIR}/tensorflow/libtensorflow_framework.so.[0-9].*
 }
 
 function build_wheel() {
@@ -154,9 +158,44 @@ function build_wheel() {
   fi
 
   pushd ${TMPDIR} > /dev/null
+
+  # In order to break the circular dependency between tensorflow and
+  # tensorflow_estimator which forces us to do a multi-step release, we are
+  # creating a virtual pip package called tensorflow and moving all the tf code
+  # into another pip called tensorflow_core:
+  #
+  #   * move code from tensorflow to tensorflow_core
+  #   * create the virtual pip package: create folder and __init__.py file with
+  #     needed code for transparent forwarding
+  #
+  # This is transparent to internal code or to code not using the pip packages.
+  mv tensorflow tensorflow_core
+  mkdir tensorflow
+  mv virtual_root.__init__.py tensorflow/__init__.py
+  # TODO(mihaimaruseac): Remove the following hack once we move API in root pkg
+  # This sed-hack below is needed because in TF 1.* we include contrib as a top
+  # level module but that doesn't exist in TF 2.*. Unfortunately, python3 is too
+  # eager so we cannot test if contrib needs to exist before importing the
+  # __init__.py from the virtual root. Thus, we need to make the following hack
+  # at least until we can generate TF API in the virtual pip and keep the rest
+  # of the code in tensorflow_core
+  sed -ie /'ONLY FOR V1, REMOVED IN V2'/d tensorflow/__init__.py
+
   rm -f MANIFEST
   echo $(date) : "=== Building wheel"
   "${PYTHON_BIN_PATH:-python}" setup.py bdist_wheel ${PKG_NAME_FLAG} >/dev/null
+
+  # Fix include path by moving tensorflow_core/include/tensorflow{_core,}
+  WHEEL_TMPDIR=$(mktemp -d)
+  WHEEL=$(readlink -f dist/*.whl)
+  unzip $WHEEL -d $WHEEL_TMPDIR > /dev/null
+  rm $WHEEL
+  pushd $WHEEL_TMPDIR > /dev/null
+  mv tensorflow_core/include/tensorflow{_core,}
+  zip -r $WHEEL . > /dev/null
+  popd > /dev/null
+  rm -rf $WHEEL_TMPDIR
+
   mkdir -p ${DEST}
   cp dist/* ${DEST}
   popd > /dev/null
