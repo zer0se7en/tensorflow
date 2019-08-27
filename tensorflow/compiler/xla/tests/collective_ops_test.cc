@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "absl/strings/str_replace.h"
 #include "absl/types/span.h"
 #include "tensorflow/compiler/xla/literal.h"
 #include "tensorflow/compiler/xla/service/gpu/nccl_all_reduce_thunk.h"
@@ -331,7 +332,7 @@ XLA_TEST_F(CollectiveOpsTest, CollectivePermute_Simple) {
     ten = u32[] constant(10)
     sum = u32[] add(replica, ten)
     p = u32[2] broadcast(sum), dimensions={}
-    ROOT permute = u32[2] collective-permute(p), source_target_pairs={{1,0}, {0,1}, {0,2}}
+    ROOT permute = u32[2] collective-permute(p), source_target_pairs={{1,0}, {0,1}, {2,2}}
   }
   )";
   const int64 kNumReplicas = 4;
@@ -349,7 +350,7 @@ XLA_TEST_F(CollectiveOpsTest, CollectivePermute_Simple) {
                                      results[0]));
   EXPECT_TRUE(LiteralTestUtil::Equal(LiteralUtil::CreateR1<uint32>({10, 10}),
                                      results[1]));
-  EXPECT_TRUE(LiteralTestUtil::Equal(LiteralUtil::CreateR1<uint32>({10, 10}),
+  EXPECT_TRUE(LiteralTestUtil::Equal(LiteralUtil::CreateR1<uint32>({12, 12}),
                                      results[2]));
   // Nothing writes to replica 3, so it is memzero'ed.
   EXPECT_TRUE(LiteralTestUtil::Equal(LiteralUtil::CreateR1<uint32>({0, 0}),

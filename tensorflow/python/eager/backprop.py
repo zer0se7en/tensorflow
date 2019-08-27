@@ -24,6 +24,7 @@ import sys
 
 import six
 
+from tensorflow.python import _pywrap_utils
 from tensorflow.python import pywrap_tensorflow
 from tensorflow.python.eager import context
 from tensorflow.python.eager import execute
@@ -33,6 +34,7 @@ from tensorflow.python.framework import constant_op
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_shape
+from tensorflow.python.framework import tensor_util
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import check_ops
 from tensorflow.python.ops import gen_array_ops
@@ -514,9 +516,8 @@ def make_vjp(f, params=None, persistent=True):
     try:
       sources = []
       args = [
-          ops.convert_to_tensor(args[i])
-          if i in parameter_positions else args[i]
-          for i in range(len(args))
+          ops.convert_to_tensor(arg) if i in parameter_positions else arg
+          for i, arg in enumerate(args)
       ]
       args = _ensure_unique_tensor_objects(parameter_positions, args)
       for i in parameter_positions:
@@ -637,7 +638,12 @@ def _zeros(shape, dtype):
     return array_ops.zeros(shape, dtype)
 
   device = ctx.device_name
-  cache_key = shape, dtype, device
+
+  if tensor_util.is_tensor(shape):
+    shape_key = shape.experimental_ref()
+  else:
+    shape_key = shape
+  cache_key = shape_key, dtype, device
   cached = ctx.zeros_cache().get(cache_key)
   if cached is None:
     if dtypes.as_dtype(dtype).is_bool:
@@ -834,8 +840,14 @@ class GradientTape(object):
 
     Args:
       tensor: a Tensor or list of Tensors.
+
+    Raises:
+      ValueError: if it encounters something that is not a tensor.
     """
     for t in nest.flatten(tensor):
+      if not (_pywrap_utils.IsTensor(t) or _pywrap_utils.IsVariable(t)):
+        raise ValueError("Passed in object of type {}, not tf.Tensor".format(
+            type(t)))
       if not t.dtype.is_floating:
         logging.log_first_n(
             logging.WARN, "The dtype of the watched tensor must be "
@@ -928,7 +940,8 @@ class GradientTape(object):
     """Computes the gradient using operations recorded in context of this tape.
 
     Args:
-      target: Tensor (or list of tensors) to be differentiated.
+      target: a list or nested structure of Tensors or Variables to be
+        differentiated.
       sources: a list or nested structure of Tensors or Variables. `target`
         will be differentiated against elements in `sources`.
       output_gradients: a list of gradients, one for each element of
@@ -1045,9 +1058,12 @@ class GradientTape(object):
         vectorization in such cases.
 
     Returns:
-      a list or nested structure of Tensors (or IndexedSlices, or None),
-      one for each element in `sources`. Returned structure is the same as
-      the structure of `sources`.
+      A list or nested structure of Tensors (or None), one for each element in
+      `sources`. Returned structure is the same as the structure of `sources`.
+      Note if any gradient is sparse (IndexedSlices), jacobian function
+      currently makes it dense and returns a Tensor instead. This may change in
+      the future.
+
 
     Raises:
       RuntimeError: If called on a non-persistent tape with eager execution
@@ -1119,7 +1135,7 @@ class GradientTape(object):
     See [wikipedia article](http://en.wikipedia.org/wiki/jacobian_matrix_and_determinant) for the
     definition of a Jacobian. This function is essentially an efficient
     implementation of the following:
-    
+
     `tf.stack([self.jacobian(y[i], x[i]) for i in range(x.shape[0])])`.
 
     Note that compared to `GradientTape.jacobian` which computes gradient of
@@ -1137,7 +1153,7 @@ class GradientTape(object):
       x = tf.constant([[1., 2.], [3., 4.]], dtype=tf.float32)
       g.watch(x)
       y = x * x
-    batch_jacobian = g.batch_jacobian(y, x) 
+    batch_jacobian = g.batch_jacobian(y, x)
     # batch_jacobian is [[[2,  0], [0,  4]], [[6,  0], [0,  8]]]
     ```
 
@@ -1220,10 +1236,11 @@ class GradientTape(object):
             " with experimental_use_pfor set to False.")
       output = pfor_ops.for_loop(loop_fn, target.dtype, target_row_size,
                                  parallel_iterations=parallel_iterations)
-    if output is None:
-      return None
-    output = array_ops.reshape(output,
-                               [target_row_size, batch_size, -1])
-    output = array_ops.transpose(output, [1, 0, 2])
     new_shape = array_ops.concat([target_shape, source_shape[1:]], axis=0)
-    return array_ops.reshape(output, new_shape)
+    if output is None:
+      return array_ops.zeros(new_shape)
+    else:
+      output = array_ops.reshape(output,
+                                 [target_row_size, batch_size, -1])
+      output = array_ops.transpose(output, [1, 0, 2])
+      return array_ops.reshape(output, new_shape)

@@ -34,6 +34,7 @@ limitations under the License.
 #include "tensorflow/core/framework/node_def.pb.h"
 #include "tensorflow/core/framework/node_def_util.h"
 #include "tensorflow/core/framework/tensor.h"
+#include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/framework/tensor_description.pb.h"
 #include "tensorflow/core/graph/graph_partition.h"
 #include "tensorflow/core/graph/tensor_id.h"
@@ -1220,7 +1221,7 @@ void MasterSession::UpdateLastAccessTime() {
   last_access_time_usec_.store(Env::Default()->NowMicros());
 }
 
-Status MasterSession::Create(GraphDef* graph_def,
+Status MasterSession::Create(GraphDef&& graph_def,
                              const WorkerCacheFactoryOptions& options) {
   if (session_opts_.config.use_per_session_threads() ||
       session_opts_.config.session_inter_op_thread_pool_size() > 0) {
@@ -1240,7 +1241,7 @@ Status MasterSession::Create(GraphDef* graph_def,
   {
     mutex_lock l(mu_);
     TF_RETURN_IF_ERROR(GraphExecutionState::MakeForBaseGraph(
-        graph_def, execution_options, &execution_state_));
+        std::move(graph_def), execution_options, &execution_state_));
   }
   should_delete_worker_sessions_ = true;
   return CreateWorkerSessions(options);
