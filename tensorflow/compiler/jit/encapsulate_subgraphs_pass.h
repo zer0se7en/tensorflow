@@ -91,8 +91,11 @@ extern const char* const kXlaNumConstantArgsAttr;
 // Name of the attribute containing the number of resource variable arguments.
 extern const char* const kXlaNumResourceArgsAttr;
 
+// Name of the attribute defining whether the cluster has reference variables.
+extern const char* const kXlaHasReferenceVarsAttr;
+
 // Sorts each node's control inputs by their names. This guarantees that for two
-// structually equivalent GraphDefs, we get the same traversal ordering on
+// structurally equivalent GraphDefs, we get the same traversal ordering on
 // node's control input fields.
 // TODO(hpucha): Move the utilities to a more appropriate place.
 void SortControlInputs(GraphDef* gdef);

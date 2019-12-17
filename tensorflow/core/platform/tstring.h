@@ -30,13 +30,11 @@ limitations under the License.
 // forward declaration and associated templates.
 namespace absl {
 class string_view;
-}
-
+class AlphaNum;
 #ifdef PLATFORM_GOOGLE
-// TODO(dero): Move above to 'namespace absl' when absl moves Cord out of global
-// namepace.
 class Cord;
 #endif  // PLATFORM_GOOGLE
+}  // namespace absl
 
 namespace tensorflow {
 
@@ -68,6 +66,9 @@ class tstring {
   };
 
  public:
+  typedef char* iterator;
+  typedef const char* const_iterator;
+
   tstring() = default;
 
   tstring(const tstring&) = default;
@@ -78,14 +79,17 @@ class tstring {
 
   tstring(const char* str) : str_(str) {}
 
+  tstring(size_t n, char c) : str_(n, c) {}
+
   template <typename T,
             typename std::enable_if<std::is_same<T, absl::string_view>::value,
                                     T>::type* = nullptr>
   explicit tstring(const T& str) : str_(str.data(), str.size()) {}
 
 #ifdef PLATFORM_GOOGLE
-  template <typename T, typename std::enable_if<std::is_same<T, Cord>::value,
-                                                T>::type* = nullptr>
+  template <typename T,
+            typename std::enable_if<std::is_same<T, absl::Cord>::value,
+                                    T>::type* = nullptr>
   explicit tstring(const T& cord) : str_(string(cord)) {}
 #endif  // PLATFORM_GOOGLE
 
@@ -111,8 +115,9 @@ class tstring {
   }
 
 #ifdef PLATFORM_GOOGLE
-  template <typename T, typename std::enable_if<std::is_same<T, Cord>::value,
-                                                T>::type* = nullptr>
+  template <typename T,
+            typename std::enable_if<std::is_same<T, absl::Cord>::value,
+                                    T>::type* = nullptr>
   tstring& operator=(const T& cord) {
     str_ = string(cord);
 
@@ -122,6 +127,12 @@ class tstring {
 
   tstring& operator=(const char* str) {
     str_ = str;
+
+    return *this;
+  }
+
+  tstring& operator=(char ch) {
+    str_ = ch;
 
     return *this;
   }
@@ -149,25 +160,44 @@ class tstring {
     return T(str_.data(), str_.size());
   }
 
+  template <typename T,
+            typename std::enable_if<std::is_same<T, absl::AlphaNum>::value,
+                                    T>::type* = nullptr>
+  operator T() const {
+    return T(str_);
+  }
+
   bool empty() const { return str_.empty(); }
 
   size_t length() const { return str_.length(); }
 
   size_t size() const { return str_.size(); }
 
+  size_t capacity() const { return str_.capacity(); }
+
   const char* c_str() const { return str_.c_str(); }
 
   const char* data() const { return str_.data(); }
 
+  const_iterator begin() const { return data(); }
+  const_iterator end() const { return data() + size(); }
+
+  char back() const { return str_.back(); }
+
   const char& operator[](size_t i) const { return str_[i]; }
 
   char* data() { return &str_[0]; }
+
+  iterator begin() { return data(); }
+  iterator end() { return data() + size(); }
 
   char& operator[](size_t i) { return str_[i]; }
 
   void clear() noexcept { str_.clear(); }
 
   void resize(size_t new_size) { str_.resize(new_size); }
+
+  void resize(size_t new_size, char c) { str_.resize(new_size, c); }
 
   void resize_uninitialized(size_t new_size) {
     ResizeUninitialized<decltype(str_)>::Resize(str_, new_size);
@@ -188,7 +218,7 @@ class tstring {
   }
 
   tstring& append(const tstring& str) {
-    str_.append(str);
+    str_.append(str.str_);
 
     return *this;
   }
@@ -204,6 +234,35 @@ class tstring {
 
     return *this;
   }
+
+  tstring& append(size_t n, char c) {
+    str_.append(n, c);
+
+    return *this;
+  }
+
+  void swap(tstring& str) { str_.swap(str.str_); }
+
+  tstring& insert(size_t pos, const tstring& str, size_t subpos,
+                  size_t sublen) {
+    str_.insert(pos, str.str_, subpos, sublen);
+
+    return *this;
+  }
+
+  tstring& insert(size_t pos, size_t n, char c) {
+    str_.insert(pos, n, c);
+
+    return *this;
+  }
+
+  tstring& erase(size_t pos, size_t len) {
+    str_.erase(pos, len);
+
+    return *this;
+  }
+
+  void push_back(char ch) { str_.push_back(ch); }
 
   friend const tstring operator+(const tstring& a, const tstring& b);
   friend bool operator==(const char* a, const tstring& b);

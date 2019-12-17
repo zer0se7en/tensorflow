@@ -38,7 +38,9 @@ and the following optional parameters:
     Whether to use [Android NNAPI](https://developer.android.com/ndk/guides/neuralnetworks/).
     This API is available on recent Android devices. Note that some Android P
     devices will fail to use NNAPI for models in `/data/local/tmp/` and this
-    benchmark tool will not correctly use NNAPI.
+    benchmark tool will not correctly use NNAPI. When on Android Q+, will also
+    print the names of NNAPI accelerators accessible through the
+    `nnapi_accelerator_name` flag.
 *   `nnapi_accelerator_name`: `str` (default="") \
     The name of the NNAPI accelerator to use (requires Android Q+). If left
     blank, NNAPI will automatically select which of the available accelerators
@@ -56,7 +58,11 @@ and the following optional parameters:
     benchmark tool will not correctly use NNAPI.
 *   `use_gpu`: `bool` (default=false) \
     Whether to use the [GPU accelerator delegate](https://github.com/tensorflow/tensorflow/tree/master/tensorflow/lite/delegates/gpu).
-    This option is currently only available on Android devices.
+    This option is currently only available on Android and iOS devices.
+*   `gpu_wait_type`: `str` (default="") \
+    Which GPU wait_type option to use, when using GPU delegate on iOS. Should be
+    one of the following: passive, active, do_not_wait, aggressive. When left
+    blank, passive mode is used by default.
 *   `enable_op_profiling`: `bool` (default=false) \
     Whether to enable per-operator profiling measurement.
 

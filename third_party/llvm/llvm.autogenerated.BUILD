@@ -197,6 +197,19 @@ gentbl(
     ]),
 )
 
+cc_library(
+    name = "utils_tablegen",
+    srcs = glob([
+        "utils/TableGen/GlobalISel/*.cpp",
+    ]),
+    hdrs = glob([
+        "utils/TableGen/GlobalISel/*.h",
+    ]),
+    deps = [
+        ":tablegen",
+    ],
+)
+
 # Binary targets used by Tensorflow.
 cc_binary(
     name = "llvm-tblgen",
@@ -211,6 +224,7 @@ cc_binary(
         ":config",
         ":support",
         ":tablegen",
+        ":utils_tablegen",
     ],
 )
 
@@ -244,6 +258,7 @@ llvm_target_list = [
             ("-gen-dag-isel", "lib/Target/AArch64/AArch64GenDAGISel.inc"),
             ("-gen-fast-isel", "lib/Target/AArch64/AArch64GenFastISel.inc"),
             ("-gen-global-isel", "lib/Target/AArch64/AArch64GenGlobalISel.inc"),
+            ("-gen-global-isel-combiner -combiners=AArch64PreLegalizerCombinerHelper", "lib/Target/AArch64/AArch64GenGICombiner.inc"),
             ("-gen-callingconv", "lib/Target/AArch64/AArch64GenCallingConv.inc"),
             ("-gen-subtarget", "lib/Target/AArch64/AArch64GenSubtargetInfo.inc"),
             ("-gen-disassembler", "lib/Target/AArch64/AArch64GenDisassemblerTables.inc"),
@@ -261,8 +276,6 @@ llvm_target_list = [
             ("-gen-dag-isel", "lib/Target/AMDGPU/AMDGPUGenDAGISel.inc"),
             ("-gen-callingconv", "lib/Target/AMDGPU/AMDGPUGenCallingConv.inc"),
             ("-gen-subtarget", "lib/Target/AMDGPU/AMDGPUGenSubtargetInfo.inc"),
-            ("-gen-tgt-intrinsic-impl", "lib/Target/AMDGPU/AMDGPUGenIntrinsicImpl.inc"),
-            ("-gen-tgt-intrinsic-enums", "lib/Target/AMDGPU/AMDGPUGenIntrinsicEnums.inc"),
             ("-gen-emitter", "lib/Target/AMDGPU/AMDGPUGenMCCodeEmitter.inc"),
             ("-gen-dfa-packetizer", "lib/Target/AMDGPU/AMDGPUGenDFAPacketizer.inc"),
             ("-gen-asm-writer", "lib/Target/AMDGPU/AMDGPUGenAsmWriter.inc"),
@@ -400,7 +413,7 @@ filegroup(
 
 py_binary(
     name = "lit",
-    srcs = ["utils/lit/lit.py"] + glob(["utils/lit/lit/*.py"]),
+    srcs = ["utils/lit/lit.py"] + glob(["utils/lit/lit/**/*.py"]),
 )
 
 cc_binary(
@@ -463,6 +476,7 @@ cc_library(
         ":aarch64_utils",
         ":analysis",
         ":asm_printer",
+        ":cf_guard",
         ":code_gen",
         ":config",
         ":core",
@@ -875,6 +889,7 @@ cc_library(
         ":arm_info",
         ":arm_utils",
         ":asm_printer",
+        ":cf_guard",
         ":code_gen",
         ":config",
         ":core",
@@ -1100,7 +1115,6 @@ cc_library(
     copts = llvm_copts + ["-Iexternal/llvm/lib/Target/AVR"],
     deps = [
         ":config",
-        ":mc",
         ":support",
     ],
 )
@@ -1417,6 +1431,27 @@ cc_library(
 )
 
 cc_library(
+    name = "cf_guard",
+    srcs = glob([
+        "lib/Transforms/CFGuard/*.c",
+        "lib/Transforms/CFGuard/*.cpp",
+        "lib/Transforms/CFGuard/*.inc",
+        "lib/Transforms/CFGuard/*.h",
+    ]),
+    hdrs = glob([
+        "include/llvm/Transforms/CFGuard/*.h",
+        "include/llvm/Transforms/CFGuard/*.def",
+        "include/llvm/Transforms/CFGuard/*.inc",
+    ]),
+    copts = llvm_copts,
+    deps = [
+        ":config",
+        ":core",
+        ":support",
+    ],
+)
+
+cc_library(
     name = "code_gen",
     srcs = glob([
         "lib/CodeGen/*.c",
@@ -1590,6 +1625,7 @@ cc_library(
     copts = llvm_copts,
     deps = [
         ":config",
+        ":mc",
         ":support",
     ],
 )
@@ -1698,6 +1734,28 @@ cc_library(
         ":runtime_dyld",
         ":support",
         ":target",
+    ],
+)
+
+cc_library(
+    name = "frontend_open_mp",
+    srcs = glob([
+        "lib/Frontend/OpenMP/*.c",
+        "lib/Frontend/OpenMP/*.cpp",
+        "lib/Frontend/OpenMP/*.inc",
+        "lib/Frontend/OpenMP/*.h",
+    ]),
+    hdrs = glob([
+        "include/llvm/Frontend/OpenMP/*.h",
+        "include/llvm/Frontend/OpenMP/*.def",
+        "include/llvm/Frontend/OpenMP/*.inc",
+    ]),
+    copts = llvm_copts,
+    deps = [
+        ":config",
+        ":core",
+        ":support",
+        ":transform_utils",
     ],
 )
 
@@ -2758,6 +2816,7 @@ cc_library(
         ":mc",
         ":mc_parser",
         ":support",
+        ":text_api",
     ],
 )
 
@@ -2805,6 +2864,26 @@ cc_library(
 )
 
 cc_library(
+    name = "orc_error",
+    srcs = glob([
+        "lib/ExecutionEngine/OrcError/*.c",
+        "lib/ExecutionEngine/OrcError/*.cpp",
+        "lib/ExecutionEngine/OrcError/*.inc",
+        "lib/ExecutionEngine/OrcError/*.h",
+    ]),
+    hdrs = glob([
+        "include/llvm/ExecutionEngine/OrcError/*.h",
+        "include/llvm/ExecutionEngine/OrcError/*.def",
+        "include/llvm/ExecutionEngine/OrcError/*.inc",
+    ]),
+    copts = llvm_copts,
+    deps = [
+        ":config",
+        ":support",
+    ],
+)
+
+cc_library(
     name = "orc_jit",
     srcs = glob([
         "lib/ExecutionEngine/Orc/*.c",
@@ -2825,6 +2904,8 @@ cc_library(
         ":jit_link",
         ":mc",
         ":object",
+        ":orc_error",
+        ":passes",
         ":runtime_dyld",
         ":support",
         ":target",
@@ -3058,6 +3139,7 @@ cc_library(
         ":code_gen",
         ":config",
         ":core",
+        ":global_i_sel",
         ":mc",
         ":riscv_desc",
         ":riscv_info",
@@ -3168,6 +3250,7 @@ cc_library(
     ]),
     copts = llvm_copts,
     deps = [
+        ":bitstream_reader",
         ":config",
         ":support",
     ],
@@ -3629,13 +3712,27 @@ cc_library(
         "lib/TextAPI/*.c",
         "lib/TextAPI/*.cpp",
         "lib/TextAPI/*.inc",
+        "lib/TextAPI/ELF/*.cpp",
+        "lib/TextAPI/MachO/*.cpp",
+        "lib/TextAPI/MachO/*.h",
         "lib/TextAPI/*.h",
     ]),
     hdrs = glob([
         "include/llvm/TextAPI/*.h",
         "include/llvm/TextAPI/*.def",
         "include/llvm/TextAPI/*.inc",
-    ]),
+    ]) + [
+        "include/llvm/TextAPI/ELF/TBEHandler.h",
+        "include/llvm/TextAPI/ELF/ELFStub.h",
+        "include/llvm/TextAPI/MachO/Architecture.def",
+        "include/llvm/TextAPI/MachO/PackedVersion.h",
+        "include/llvm/TextAPI/MachO/InterfaceFile.h",
+        "include/llvm/TextAPI/MachO/Symbol.h",
+        "include/llvm/TextAPI/MachO/ArchitectureSet.h",
+        "include/llvm/TextAPI/MachO/TextAPIWriter.h",
+        "include/llvm/TextAPI/MachO/TextAPIReader.h",
+        "include/llvm/TextAPI/MachO/Architecture.h",
+    ],
     copts = llvm_copts,
     deps = [
         ":binary_format",
@@ -3787,6 +3884,7 @@ cc_library(
     copts = llvm_copts + ["-Iexternal/llvm/lib/Target/WebAssembly"],
     deps = [
         ":config",
+        ":mc",
         ":mc_disassembler",
         ":support",
         ":web_assembly_desc",
@@ -3875,6 +3973,7 @@ cc_library(
     deps = [
         ":analysis",
         ":asm_printer",
+        ":cf_guard",
         ":code_gen",
         ":config",
         ":core",

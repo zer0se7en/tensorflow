@@ -123,9 +123,9 @@ std::vector<HloInstruction*> GetProducerConsumerMultiOutputFusionCandidates(
   for (HloInstruction* consumer : producer->users()) {
     VLOG(3) << "Looking at producer " << producer->name()
             << " and its consumer " << consumer->name();
-    if (!IsInputFusibleReduction(*consumer)) {
+    if (!IsFusibleAsMultiOutputFusionRoot(*consumer)) {
       VLOG(3) << "Consumer " << consumer->name()
-              << " is not an input-fusible reduction..";
+              << " is not eligible as multi-output fusion root.";
       continue;
     }
     if (!IsProducerConsumerMultiOutputFusible(*producer, *consumer)) {
@@ -136,7 +136,7 @@ std::vector<HloInstruction*> GetProducerConsumerMultiOutputFusionCandidates(
     // Do not fuse a producer if the other operands of the fusion are
     // reachable from the producer, this would create a cycle.
     auto operand_reachable_from_producer = [&](const HloInstruction* operand) {
-      // If a get-tuple-elment instruction is not in the reachability
+      // If a get-tuple-element instruction is not in the reachability
       // map, it has been created by fusion in this pass. Simply move
       // on to its operand, which is in the reachability map.
       if (!reachability.IsPresent(operand) &&
@@ -198,6 +198,7 @@ bool GpuMultiOutputFusion::DoProducerConsumerMultiOutputFusion() {
         CHECK_EQ(0, producer->user_count());
         TF_CHECK_OK(computation()->RemoveInstruction(producer));
       }
+      RecomputeReachability();
       continue;
     }
     HloInstruction* input_fusion =

@@ -19,6 +19,8 @@ limitations under the License.
 // maintains the data structures required to do so.
 
 #include <stack>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "tensorflow/core/framework/tensor_shape.h"
@@ -88,12 +90,6 @@ class VSpace {
   // a tensor with the result.
   virtual Gradient* AggregateGradients(
       gtl::ArraySlice<Gradient*> gradient_tensors) const = 0;
-
-  // Returns a tensor of the right shape and dtype filled with zeros.
-  virtual Gradient* Zeros(const TapeTensor& tensor) const = 0;
-
-  // Returns a Tensor which is filled with ones and like the input.
-  virtual Gradient* Ones(const TapeTensor& tensor) const = 0;
 
   // Calls the passed-in backward function.
   virtual Status CallBackwardFunction(
@@ -593,7 +589,7 @@ Status InitialGradients(
           if (op_it->second.output_tensor_info[j].GetID() == id) {
             found = true;
             (*result)[id].push_back(
-                vspace.Ones(op_it->second.output_tensor_info[j]));
+                op_it->second.output_tensor_info[j].OnesLike());
             break;
           }
         }
@@ -608,7 +604,7 @@ Status InitialGradients(
         // target is also a source.
         auto source_tensor = sources_that_are_targets.find(id);
         if (source_tensor != sources_that_are_targets.end()) {
-          (*result)[id].push_back(vspace.Ones(source_tensor->second));
+          (*result)[id].push_back(source_tensor->second.OnesLike());
         }
       }
     } else {
@@ -667,16 +663,15 @@ Status GradientTape<Gradient, BackwardFunction, TapeTensor>::ComputeGradient(
   Status s = InitialGradients(vspace, target_tensor_ids,
                               sources_that_are_targets, output_gradients,
                               tensor_tape_, state.op_tape, &gradients);
-  auto cleanup = [this, &state]() {
+  auto cleanup = gtl::MakeCleanup([this, &state]() {
     if (!persistent_) {
       // Release all backprop functions
       for (const auto& pair : state.op_tape) {
         pair.second.backward_function_deleter(pair.second.backward_function);
       }
     }
-  };
+  });
   if (!s.ok()) {
-    cleanup();
     return s;
   }
 
@@ -748,17 +743,23 @@ Status GradientTape<Gradient, BackwardFunction, TapeTensor>::ComputeGradient(
     std::vector<Gradient*> in_gradients;
     if (any_gradient_nonzero) {
       for (const auto i : zero_indices) {
-        out_gradients[i] = vspace.Zeros(trace.output_tensor_info[i]);
+        out_gradients[i] = trace.output_tensor_info[i].ZerosLike();
       }
       Status s;
       s = vspace.CallBackwardFunction(trace.backward_function,
                                       unneeded_gradients, out_gradients,
                                       &in_gradients);
+      if (in_gradients.size() != trace.input_tensor_id.size()) {
+        return tensorflow::errors::Internal(
+            "Recorded operation '", trace.op_type,
+            "' returned too few gradients. Expected ",
+            trace.input_tensor_id.size(), " but received ",
+            in_gradients.size());
+      }
       if (!persistent_) {
         trace.backward_function_deleter(trace.backward_function);
       }
       if (!s.ok()) {
-        cleanup();
         return s;
       }
     } else {
@@ -916,7 +917,22 @@ ForwardAccumulator<Gradient, BackwardFunction, TapeTensor>::ForwardpropFromTape(
   sources.reserve(output_tensors.size());
   for (const TapeTensor& output_tensor : output_tensors) {
     // Ownership of `aid` transferred to CallBackwardFunction below.
-    Gradient* aid = vspace_.Ones(output_tensor);
+    Gradient* aid;
+    if (output_tensor.GetDType() == tensorflow::DT_VARIANT) {
+      // Note: Needs to be zeros rather than ones since there's currently no
+      // ones_like for variants.
+      aid = output_tensor.ZerosLike();
+    } else {
+      // TODO(allenl): Figure out why using zeros_like everywhere causes issues
+      // for some gradient functions and if there's another way to work around
+      // it (e.g. conds instead of ifs). The value shouldn't really matter.
+      aid = output_tensor.OnesLike();
+    }
+    if (TF_PREDICT_FALSE(aid == nullptr)) {
+      return tensorflow::errors::Internal(
+          "Failed to create ones tensor for tensor ", output_tensor.GetID(),
+          " with dtype ", output_tensor.GetDType());
+    }
     forwardprop_aids.push_back(aid);
     int64 aid_id = vspace_.TensorId(aid);
     sources.push_back(aid_id);
@@ -1022,7 +1038,7 @@ Status ForwardAccumulator<Gradient, BackwardFunction, TapeTensor>::Accumulate(
       if (IsDtypeTrainable(input_tensors[target_index].GetDType())) {
         // ForwardAccumulator defaults to zeros for unwatched Tensors, unlike
         // GradientTape which uses ones.
-        Gradient* zero = vspace_.Zeros(input_tensors[target_index]);
+        Gradient* zero = input_tensors[target_index].ZerosLike();
         new_zeros.push_back(zero);
         in_grads.push_back(zero);
       } else {
