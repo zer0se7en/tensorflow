@@ -1187,7 +1187,7 @@ Status MarkForCompilationPassImpl::FindCompilationCandidates() {
     }
 
     if (!whitelist.empty() && !whitelist.contains(node->def().op())) {
-      VLOG(1) << "Rejecting " << node->name()
+      VLOG(1) << "Rejecting TF operation " << node->def().op()
               << " as it is not listed in --tf_xla_ops_to_cluster.";
       continue;
     }
@@ -1776,9 +1776,9 @@ absl::flat_hash_map<string, std::vector<string>>* GetWhitelistTable() {
             "Lgamma", "Digamma",
             // Binary
             "Add", "AddV2", "Sub", "Mul", "Div", "Atan2", "Complex", "DivNoNan",
-            "MulNoNan", "FloorDiv", "Xlogy", "Xdivy", "FloorMod", "BitwiseAnd",
-            "BitwiseOr", "BitwiseXor", "LeftShift", "RightShift", "LogicalAnd",
-            "LogicalOr", "Mod", "Maximum", "Minimum", "RealDiv",
+            "MulNoNan", "FloorDiv", "Xlogy", "Xlog1py", "Xdivy", "FloorMod",
+            "BitwiseAnd", "BitwiseOr", "BitwiseXor", "LeftShift", "RightShift",
+            "LogicalAnd", "LogicalOr", "Mod", "Maximum", "Minimum", "RealDiv",
             "ReciprocalGrad", "RsqrtGrad", "SqrtGrad", "TruncateDiv",
             "TruncateMod", "Equal", "NotEqual", "Greater", "GreaterEqual",
             "Less", "LessEqual", "SigmoidGrad", "SoftplusGrad", "SoftsignGrad",
@@ -2036,6 +2036,7 @@ absl::flat_hash_set<string> GetKnownXLAWhitelistOp() {
                                      "XlaDynamicSlice",
                                      "XlaDynamicUpdateSlice",
                                      "XlaEinsum",
+                                     "XlaGather",
                                      "XlaIf",
                                      "XlaKeyValueSort",
                                      "XlaPad",
@@ -2043,6 +2044,7 @@ absl::flat_hash_set<string> GetKnownXLAWhitelistOp() {
                                      "XlaReduce",
                                      "XlaReduceWindow",
                                      "XlaReplicaId",
+                                     "XlaScatter",
                                      "XlaSelectAndScatter",
                                      "XlaSelfAdjointEig",
                                      "XlaSend",

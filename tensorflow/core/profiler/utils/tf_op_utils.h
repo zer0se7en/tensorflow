@@ -16,6 +16,7 @@ limitations under the License.
 #ifndef TENSORFLOW_CORE_PROFILER_UTILS_TF_OP_UTILS_H_
 #define TENSORFLOW_CORE_PROFILER_UTILS_TF_OP_UTILS_H_
 
+#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 
 namespace tensorflow {
@@ -24,6 +25,8 @@ namespace profiler {
 // Special op types.
 ABSL_CONST_INIT extern const absl::string_view kUnknownOp;
 ABSL_CONST_INIT extern const absl::string_view kDatasetOp;
+ABSL_CONST_INIT extern const absl::string_view kMemcpyHToDOp;
+ABSL_CONST_INIT extern const absl::string_view kMemcpyDToHOp;
 
 // Breaks a TensorFlow op fullname into name and type.
 struct TfOp {
@@ -47,6 +50,25 @@ inline bool IsDatasetOp(absl::string_view tf_op_type) {
   return tf_op_type == kDatasetOp;
 }
 
+// Returns true if the given name is a TensorFlow Infeed Enqueue Op.
+inline bool IsInfeedEnqueueOp(absl::string_view tf_op_type) {
+  return tf_op_type == "InfeedEnqueue" || tf_op_type == "InfeedEnqueueTuple";
+}
+
+// Returns true if the given name is a TensorFlow embedding op.
+inline bool IsEmbeddingOp(absl::string_view tf_op_fullname) {
+  return absl::StrContains(tf_op_fullname, "Embedding");
+}
+
+// Returns true if the given op is for copying data from host to device.
+inline bool IsMemcpyHToDOp(absl::string_view tf_op_type) {
+  return tf_op_type == kMemcpyHToDOp;
+}
+
+// Returns true if the given op is for copying data from device to host.
+inline bool IsMemcpyDToHOp(absl::string_view tf_op_type) {
+  return tf_op_type == kMemcpyDToHOp;
+}
 }  // namespace profiler
 }  // namespace tensorflow
 
