@@ -433,8 +433,8 @@ cc_library(
     ]),
     includes = ["include"],
     deps = [
+        ":AffineOps",
         ":DialectUtils",
-        ":EDSC",
         ":IR",
         ":StandardOps",
         ":Support",
@@ -603,14 +603,23 @@ cc_library(
 
 cc_library(
     name = "GPUTransforms",
-    srcs = ["lib/Dialect/GPU/Transforms/KernelOutlining.cpp"],
+    srcs = glob(
+        [
+            "lib/Dialect/GPU/Transforms/*.cpp",
+            "lib/Dialect/GPU/Transforms/*.h",
+        ],
+        exclude = ["lib/Dialect/**/DialectRegistration.cpp"],
+    ),
     hdrs = ["include/mlir/Dialect/GPU/Passes.h"],
     includes = ["include"],
     deps = [
+        ":EDSC",
         ":GPUDialect",
         ":IR",
+        ":LoopOps",
         ":Pass",
         ":StandardOps",
+        ":Support",
         ":Transforms",
     ],
     alwayslink = 1,
@@ -1336,7 +1345,7 @@ cc_library(
         ":AffineToStandardTransforms",
         ":GPUDialect",
         ":IR",
-        ":Linalg",
+        ":LinalgTransforms",
         ":LoopOps",
         ":StandardOps",
         ":Support",
@@ -1861,35 +1870,8 @@ cc_binary(
 
 cc_library(
     name = "TableGen",
-    srcs = [
-        "lib/TableGen/Argument.cpp",
-        "lib/TableGen/Attribute.cpp",
-        "lib/TableGen/Constraint.cpp",
-        "lib/TableGen/Dialect.cpp",
-        "lib/TableGen/Format.cpp",
-        "lib/TableGen/OpInterfaces.cpp",
-        "lib/TableGen/OpTrait.cpp",
-        "lib/TableGen/Operator.cpp",
-        "lib/TableGen/Pattern.cpp",
-        "lib/TableGen/Predicate.cpp",
-        "lib/TableGen/Type.cpp",
-    ],
-    hdrs = [
-        "include/mlir/TableGen/Argument.h",
-        "include/mlir/TableGen/Attribute.h",
-        "include/mlir/TableGen/Constraint.h",
-        "include/mlir/TableGen/Dialect.h",
-        "include/mlir/TableGen/Format.h",
-        "include/mlir/TableGen/GenInfo.h",
-        "include/mlir/TableGen/GenNameParser.h",
-        "include/mlir/TableGen/OpInterfaces.h",
-        "include/mlir/TableGen/OpTrait.h",
-        "include/mlir/TableGen/Operator.h",
-        "include/mlir/TableGen/Pattern.h",
-        "include/mlir/TableGen/Predicate.h",
-        "include/mlir/TableGen/Region.h",
-        "include/mlir/TableGen/Type.h",
-    ],
+    srcs = glob(["lib/TableGen/*.cpp"]),
+    hdrs = glob(["include/mlir/TableGen/*.h"]),
     includes = ["include"],
     deps = [
         ":Support",
@@ -1915,18 +1897,10 @@ cc_library(
 
 cc_binary(
     name = "mlir-tblgen",
-    srcs = [
-        "tools/mlir-tblgen/DocGenUtilities.h",
-        "tools/mlir-tblgen/EnumsGen.cpp",
-        "tools/mlir-tblgen/LLVMIRConversionGen.cpp",
-        "tools/mlir-tblgen/OpDefinitionsGen.cpp",
-        "tools/mlir-tblgen/OpDocGen.cpp",
-        "tools/mlir-tblgen/OpInterfacesGen.cpp",
-        "tools/mlir-tblgen/ReferenceImplGen.cpp",
-        "tools/mlir-tblgen/RewriterGen.cpp",
-        "tools/mlir-tblgen/SPIRVUtilsGen.cpp",
-        "tools/mlir-tblgen/StructsGen.cpp",
-    ],
+    srcs = glob([
+        "tools/mlir-tblgen/*.h",
+        "tools/mlir-tblgen/*.cpp",
+    ]),
     linkopts = [
         "-lm",
         "-lpthread",
@@ -2221,7 +2195,8 @@ cc_library(
         ":IR",
         ":LLVMDialect",
         ":LLVMTransforms",
-        ":Linalg",
+        ":LinalgOps",
+        ":LinalgTransforms",
         ":Pass",
         ":StandardOps",
         ":Support",
@@ -2233,14 +2208,37 @@ cc_library(
     alwayslink = 1,
 )
 
-# TODO(ntv): Update these to make mapping with cmake simpler.
 cc_library(
-    name = "Linalg",
+    name = "LinalgOps",
+    srcs = [
+        "lib/Dialect/Linalg/IR/LinalgOps.cpp",
+        "lib/Dialect/Linalg/IR/LinalgTypes.cpp",
+    ],
+    hdrs = [
+        "include/mlir/Dialect/Linalg/IR/LinalgOps.h",
+        "include/mlir/Dialect/Linalg/IR/LinalgTraits.h",
+        "include/mlir/Dialect/Linalg/IR/LinalgTypes.h",
+    ],
+    includes = ["include"],
+    deps = [
+        ":DialectUtils",
+        ":IR",
+        ":LinalgOpsIncGen",
+        ":LinalgStructuredOpsIncGen",
+        ":LinalgTransformPatternsIncGen",
+        ":Parser",
+        ":Support",
+        "@llvm-project//llvm:core",
+        "@llvm-project//llvm:support",
+    ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "LinalgTransforms",
     srcs = [
         "lib/Dialect/Linalg/Analysis/DependenceAnalysis.cpp",
         "lib/Dialect/Linalg/EDSC/Builders.cpp",
-        "lib/Dialect/Linalg/IR/LinalgOps.cpp",
-        "lib/Dialect/Linalg/IR/LinalgTypes.cpp",
         "lib/Dialect/Linalg/Transforms/Fusion.cpp",
         "lib/Dialect/Linalg/Transforms/LinalgToLoops.cpp",
         "lib/Dialect/Linalg/Transforms/LinalgTransforms.cpp",
@@ -2252,9 +2250,6 @@ cc_library(
         "include/mlir/Dialect/Linalg/Analysis/DependenceAnalysis.h",
         "include/mlir/Dialect/Linalg/EDSC/Builders.h",
         "include/mlir/Dialect/Linalg/EDSC/Intrinsics.h",
-        "include/mlir/Dialect/Linalg/IR/LinalgOps.h",
-        "include/mlir/Dialect/Linalg/IR/LinalgTraits.h",
-        "include/mlir/Dialect/Linalg/IR/LinalgTypes.h",
         "include/mlir/Dialect/Linalg/Passes.h",
         "include/mlir/Dialect/Linalg/Transforms/LinalgTransforms.h",
         "include/mlir/Dialect/Linalg/Utils/Intrinsics.h",
@@ -2271,6 +2266,7 @@ cc_library(
         ":IR",
         ":LLVMDialect",
         ":LLVMTransforms",
+        ":LinalgOps",
         ":LinalgOpsIncGen",
         ":LinalgStructuredOpsIncGen",
         ":LinalgTransformPatternsIncGen",
@@ -2290,8 +2286,8 @@ cc_library(
 
 cc_library(
     name = "LinalgDialectRegistration",
-    srcs = ["lib/Dialect/Linalg/LinalgRegistration.cpp"],
-    deps = [":Linalg"],
+    srcs = ["lib/Dialect/Linalg/IR/LinalgRegistration.cpp"],
+    deps = [":LinalgOps"],
     alwayslink = 1,
 )
 
@@ -2460,12 +2456,13 @@ filegroup(
 
 exports_files(
     [
-        "include/mlir/Dialect/StandardOps/Ops.td",
-        "include/mlir/Analysis/CallInterfaces.td",
-        "include/mlir/Transforms/InliningUtils.h",
-        "include/mlir/IR/OpBase.td",
-        "include/mlir/IR/OpAsmInterface.td",
         "include/mlir/Analysis/CallInterfaces.h",
+        "include/mlir/Analysis/CallInterfaces.td",
+        "include/mlir/Dialect/LLVMIR/LLVMOpBase.td",
+        "include/mlir/Dialect/StandardOps/Ops.td",
+        "include/mlir/IR/OpAsmInterface.td",
+        "include/mlir/IR/OpBase.td",
+        "include/mlir/Transforms/InliningUtils.h",
     ],
     visibility = ["@llvm-project//mlir:friends"],
 )
