@@ -22,6 +22,7 @@ import collections
 import functools
 import itertools
 import threading
+import weakref
 
 import numpy as np
 import six
@@ -29,6 +30,7 @@ from six.moves import zip  # pylint: disable=redefined-builtin
 
 from google.protobuf import json_format
 from tensorflow.core.framework import node_def_pb2
+from tensorflow.python import tf2
 from tensorflow.python.autograph.core import ag_ctx
 from tensorflow.python.autograph.impl import api as autograph
 from tensorflow.python.distribute import distribution_strategy_context as ds_context
@@ -53,6 +55,7 @@ from tensorflow.python.keras.engine import base_layer_utils
 from tensorflow.python.keras.engine import input_spec
 from tensorflow.python.keras.engine import node as node_module
 from tensorflow.python.keras.mixed_precision.experimental import autocast_variable
+from tensorflow.python.keras.mixed_precision.experimental import loss_scale_optimizer
 from tensorflow.python.keras.mixed_precision.experimental import policy
 from tensorflow.python.keras.saving.saved_model import layer_serialization
 from tensorflow.python.keras.utils import generic_utils
@@ -92,15 +95,44 @@ _keras_model_gauge = monitoring.BoolGauge(
 
 @keras_export('keras.layers.Layer')
 class Layer(module.Module, version_utils.LayerVersionSelector):
-  """Base layer class.
+  """This is the class from which all layers inherit.
 
-  This is the class from which all layers inherit.
-
-  A layer is a class implementing common neural networks operations, such
-  as convolution, batch norm, etc. These operations require managing weights,
-  losses, updates, and inter-layer connectivity.
+  A layer is a callable object that takes as input one or more tensors and
+  that outputs one or more tensors. It involves *computation*, defined
+  in the `call()` method, and a *state* (weight variables), defined
+  either in the constructor `__init__()` or in the `build()` method.
 
   Users will just instantiate a layer and then treat it as a callable.
+
+  Arguments:
+    trainable: Boolean, whether the layer's variables should be trainable.
+    name: String name of the layer.
+    dtype: The dtype of the layer's computations and weights (default of
+      `None` means use `tf.keras.backend.floatx` in TensorFlow 2, or the type
+      of the first input in TensorFlow 1).
+    dynamic: Set this to `True` if your layer should only be run eagerly, and
+      should not be used to generate a static computation graph.
+      This would be the case for a Tree-RNN or a recursive network,
+      for example, or generally for any layer that manipulates tensors
+      using Python control flow. If `False`, we assume that the layer can
+      safely be used to generate a static computation graph.
+
+  Attributes:
+    name: The name of the layer (string).
+    dtype: The dtype of the layer's computations and weights. If mixed
+      precision is used with a `tf.keras.mixed_precision.experimental.Policy`,
+      this is instead just the dtype of the layer's weights, as the computations
+      are done in a different dtype.
+    trainable_weights: List of variables to be included in backprop.
+    non_trainable_weights: List of variables that should not be
+      included in backprop.
+    weights: The concatenation of the lists trainable_weights and
+      non_trainable_weights (in this order).
+    trainable: Whether the layer should be trained (boolean), i.e. whether
+      its potentially-trainable weights should be returned as part of
+      `layer.trainable_weights`.
+    input_spec: Optional (list of) `InputSpec` object(s) specifying the
+      constraints on inputs that can be accepted by the layer.
 
   We recommend that descendants of `Layer` implement the following methods:
 
@@ -124,35 +156,104 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     This method is used when saving
     the layer or a model that contains this layer.
 
-  Arguments:
-    trainable: Boolean, whether the layer's variables should be trainable.
-    name: String name of the layer.
-    dtype: The dtype of the layer's computations and weights (default of
-      `None` means use `tf.keras.backend.floatx` in TensorFlow 2, or the type
-      of the first input in TensorFlow 1).
-    dynamic: Set this to `True` if your layer should only be run eagerly, and
-      should not be used to generate a static computation graph.
-      This would be the case for a Tree-RNN or a recursive network,
-      for example, or generally for any layer that manipulates tensors
-      using Python control flow. If `False`, we assume that the layer can
-      safely be used to generate a static computation graph.
+  Examples:
 
-  Attributes:
-    name: The name of the layer (string).
-    dtype: The dtype of the layer's computations and weights. If mixed
-      precision is used with a `tf.keras.mixed_precision.experimental.Policy`,
-      this is instead just the dtype of the layer's weights, as the computations
-      are done in a different dtype.
-    updates: List of update ops of this layer.
-    losses: List of losses added by this layer.
-    trainable_weights: List of variables to be included in backprop.
-    non_trainable_weights: List of variables that should not be
-      included in backprop.
-    weights: The concatenation of the lists trainable_weights and
-      non_trainable_weights (in this order).
-    trainable: Whether the layer should be trained (boolean).
-    input_spec: Optional (list of) `InputSpec` object(s) specifying the
-      constraints on inputs that can be accepted by the layer.
+  Here's a basic example: a layer with two variables, `w` and `b`,
+  that returns `y = w . x + b`.
+  It shows how to implement `build()` and `call()`.
+  Variables set as attributes of a layer are tracked as weights
+  of the layers (in `layer.weights`).
+
+  ```python
+  class SimpleDense(Layer):
+
+    def __init__(self, units=32):
+        super(SimpleDense, self).__init__()
+        self.units = units
+
+    def build(self, input_shape):  # Create the state of the layer (weights)
+      w_init = tf.random_normal_initializer()
+      self.w = tf.Variable(
+          initial_value=w_init(shape=(input_shape[-1], self.units),
+                               dtype='float32'),
+          trainable=True)
+      b_init = tf.zeros_initializer()
+      self.b = tf.Variable(
+          initial_value=b_init(shape=(self.units,), dtype='float32'),
+          trainable=True)
+
+    def call(self, inputs):  # Defines the computation from inputs to outputs
+        return tf.matmul(inputs, self.w) + self.b
+
+  # Instantiates the layer.
+  linear_layer = SimpleDense(4)
+
+  # This will also call `build(input_shape)` and create the weights.
+  y = linear_layer(tf.ones((2, 2)))
+  assert len(linear_layer.weights) == 2
+
+  # These weights are trainable, so they're listed in `trainable_weights`:
+  assert len(linear_layer.trainable_weights) == 2
+  ```
+
+  Note that the method `add_weight()` offers a shortcut to create weights:
+
+  ```python
+  class SimpleDense(Layer):
+
+    def __init__(self, units=32):
+        super(SimpleDense, self).__init__()
+        self.units = units
+
+    def build(self, input_shape):
+        self.w = self.add_weight(shape=(input_shape[-1], self.units),
+                                 initializer='random_normal',
+                                 trainable=True)
+        self.b = self.add_weight(shape=(self.units,),
+                                 initializer='random_normal',
+                                 trainable=True)
+
+    def call(self, inputs):
+        return tf.matmul(inputs, self.w) + self.b
+  ```
+
+  Besides trainable weights, updated via backpropagation during training,
+  layers can also have non-trainable weights. These weights are meant to
+  be updated manually during `call()`. Here's a example layer that computes
+  the running sum of its inputs:
+
+  ```python
+  class ComputeSum(Layer):
+
+    def __init__(self, input_dim):
+        super(ComputeSum, self).__init__()
+        # Create a non-trainable weight.
+        self.total = tf.Variable(initial_value=tf.zeros((input_dim,)),
+                                 trainable=False)
+
+    def call(self, inputs):
+        self.total.assign_add(tf.reduce_sum(inputs, axis=0))
+        return self.total
+
+  my_sum = ComputeSum(2)
+  x = tf.ones((2, 2))
+
+  y = my_sum(x)
+  print(y.numpy())  # [2. 2.]
+
+  y = my_sum(x)
+  print(y.numpy())  # [4. 4.]
+
+  assert my_sum.weights == [my_sum.total]
+  assert my_sum.non_trainable_weights == [my_sum.total]
+  assert my_sum.trainable_weights == []
+  ```
+
+  For more information about creating layers, see the guide
+  [Writing custom layers and models with Keras](
+    https://www.tensorflow.org/guide/keras/custom_layers_and_models)
+
+  About the layer's `dtype` attribute:
 
   Each layer has a dtype, which is typically the dtype of the layer's
   computations and variables. A layer's dtype can be queried via the
@@ -230,6 +331,8 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     # A list of metric instances corresponding to the symbolic metric tensors
     # added using the `add_metric` API.
     self._metrics = []
+    # Ensures the same metric is not added multiple times in `MirroredStrategy`.
+    self._metrics_lock = threading.Lock()
 
     # Both graph and subclassed networks have a dtype policy. For graph
     # networks, the policy's compute and variable dtypes are ignored, but other
@@ -276,7 +379,15 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     # Manage initial weight values if passed.
     self._initial_weights = kwargs.get('weights', None)
 
+    # Whether the layer will track any layers that is set as attribute on itself
+    # as sub-layers, the weights from the sub-layers will be included in the
+    # parent layer's variables() as well.
+    # Default to True, which means auto tracking is turned on. Certain subclass
+    # might want to turn it off, like Sequential model.
+    self._auto_track_sub_layers = True
+
   @trackable.no_automatic_dependency_tracking
+  @generic_utils.default
   def build(self, input_shape):
     """Creates the variables of the layer (optional, for subclass implementers).
 
@@ -291,7 +402,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         `TensorShape` if the layer expects a list of inputs
         (one instance per input).
     """
-    # Only record the build input shapes of overridden the build methods.
+    # Only record the build input shapes of overridden build methods.
     if not hasattr(self.build, '_is_default'):
       self._build_input_shape = input_shape
     self.built = True
@@ -300,9 +411,14 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
   def call(self, inputs, **kwargs):  # pylint: disable=unused-argument
     """This is where the layer's logic lives.
 
+    Note here that `call()` method in `tf.keras` is little bit different
+    from `keras` API. In `keras` API, you can pass support masking for
+    layers as additional arguements. Whereas `tf.keras` has `compute_mask()`
+    method to support masking.
+
     Arguments:
         inputs: Input tensor, or list/tuple of input tensors.
-        **kwargs: Additional keyword arguments.
+        **kwargs: Additional keyword arguments. Currently unused.
 
     Returns:
         A tensor or list/tuple of tensors.
@@ -401,7 +517,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       dtype = self.dtype or backend.floatx()
     dtype = dtypes.as_dtype(dtype)
     if self._dtype_policy.variable_dtype is None:
-      # The policy is "infer", so we infer the policy from the variable dtype.
+      # The policy is "_infer", so we infer the policy from the variable dtype.
       self._dtype_policy = policy.Policy(dtype.base_dtype.name)
     initializer = initializers.get(initializer)
     regularizer = regularizers.get(regularizer)
@@ -424,11 +540,11 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     if initializer is None:
       # If dtype is DT_FLOAT, provide a uniform unit scaling initializer
       if dtype.is_floating:
-        initializer = initializers.glorot_uniform()
+        initializer = initializers.get('glorot_uniform')
       # If dtype is DT_INT/DT_UINT, provide a default value `zero`
       # If dtype is DT_BOOL, provide a default value `FALSE`
       elif dtype.is_integer or dtype.is_unsigned or dtype.is_bool:
-        initializer = initializers.zeros()
+        initializer = initializers.get('zeros')
       # NOTES:Do we need to support for handling DT_STRING and DT_COMPLEX here?
       else:
         raise ValueError('An initializer for variable %s of type %s is required'
@@ -490,7 +606,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         self._non_trainable_weights.append(variable)
     return variable
 
-  @base_layer_utils.default
+  @generic_utils.default
   def get_config(self):
     """Returns the config of the layer.
 
@@ -630,7 +746,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         lambda s: tensor_spec.TensorSpec(dtype=dtype, shape=s),
         output_shape)
 
-  @base_layer_utils.default
+  @generic_utils.default
   def compute_mask(self, inputs, mask=None):  # pylint: disable=unused-argument
     """Computes an output mask tensor.
 
@@ -849,10 +965,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           if hasattr(self, '_set_inputs') and not self.inputs:
             # Subclassed network: explicitly set metadata normally set by
             # a call to self._set_inputs().
-            # TODO(b/120997007): This should be done in Eager as well, but
-            # causes garbage collection issues because of the placeholders
-            # created on the default Keras graph.
-            self._set_inputs(inputs, outputs)
+            self._set_inputs(cast_inputs, outputs)
       else:
         # Eager execution on data tensors.
         with backend.name_scope(self._name_scope()):
@@ -863,26 +976,31 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
             outputs = self.call(cast_inputs, *args, **kwargs)
           self._handle_activity_regularization(inputs, outputs)
           self._set_mask_metadata(inputs, outputs, input_masks)
+          if hasattr(self, '_set_save_spec'):
+            self._set_save_spec(cast_inputs)
 
     return outputs
 
   @property
   def dtype(self):
+    """Dtype used by the weights of the layer, set in the constructor."""
     return self._dtype_policy.variable_dtype
 
   @property
   def name(self):
+    """Name of the layer (string), set in the constructor."""
     return self._name
 
   @property
   @trackable_layer_utils.cache_recursive_attribute('dynamic')
   def dynamic(self):
+    """Whether the layer is dynamic (eager-only); set in the constructor."""
     # NOTE(taylorrobie): Currently self._dynamic is read-only. If that changes
     #                    then this cache logic must be updated.
     return self._dynamic
 
   @property
-  @doc_controls.do_not_generate_docs
+  @doc_controls.do_not_doc_inheritable
   @trackable_layer_utils.cache_recursive_attribute('stateful')
   def stateful(self):
     return self._stateful
@@ -914,6 +1032,37 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def input_spec(self):
+    """`InputSpec` instance(s) describing the input format for this layer.
+
+    When you create a layer subclass, you can set `self.input_spec` to enable
+    the layer to run input compatibility checks when it is called.
+    Consider a `Conv2D` layer: it can only be called on a single input tensor
+    of rank 4. As such, you can set, in `__init__()`:
+
+    ```python
+    self.input_spec = tf.keras.layers.InputSpec(ndim=4)
+    ```
+
+    Now, if you try to call the layer on an input that isn't rank 4
+    (for instance, an input of shape `(2,)`, it will raise a nicely-formatted
+    error:
+
+    ```
+    ValueError: Input 0 of layer conv2d is incompatible with the layer:
+    expected ndim=4, found ndim=1. Full shape received: [2]
+    ```
+
+    Input checks that can be specified via `input_spec` include:
+    - Structure (e.g. a single input, a list of 2 inputs, etc)
+    - Shape
+    - Rank (ndim)
+    - Dtype
+
+    For more information, see `tf.keras.layers.InputSpec`.
+
+    Returns:
+      A `tf.keras.layers.InputSpec` instance, or nested structure thereof.
+    """
     return self._input_spec
 
   @input_spec.setter
@@ -929,6 +1078,13 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def trainable_weights(self):
+    """List of all trainable weights tracked by this layer.
+
+    Trainable weights are updated via gradient descent during training.
+
+    Returns:
+      A list of trainable variables.
+    """
     if self.trainable:
       children_weights = self._gather_children_attribute('trainable_weights')
       return self._dedup_weights(self._trainable_weights + children_weights)
@@ -937,6 +1093,14 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def non_trainable_weights(self):
+    """List of all non-trainable weights tracked by this layer.
+
+    Non-trainable weights are *not* updated during training. They are expected
+    to be updated manually in `call()`.
+
+    Returns:
+      A list of non-trainable variables.
+    """
     if self.trainable:
       children_weights = self._gather_children_attribute(
           'non_trainable_weights')
@@ -958,6 +1122,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return self.trainable_weights + self.non_trainable_weights
 
   @property
+  @doc_controls.do_not_doc_inheritable
   def updates(self):
     collected_updates = []
     all_layers = self._gather_unique_layers()
@@ -967,23 +1132,47 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           continue
         for u in layer._updates:
           if callable(u):
-            try:
-              u = u()
-            except errors.InaccessibleTensorError:
-              base_layer_utils.check_graph_consistency(
-                  method='add_update', force_raise=True)
-              raise  # check_graph_consistency may not always raise.
-          base_layer_utils.check_graph_consistency(u, method='add_update')
+            u = u()
           collected_updates.append(u)
     return collected_updates
 
   @property
   def losses(self):
-    """Losses which are associated with this `Layer`.
+    """List of losses added using the `add_loss()` API.
 
     Variable regularization tensors are created when this property is accessed,
     so it is eager safe: accessing `losses` under a `tf.GradientTape` will
     propagate gradients back to the corresponding variables.
+
+    Examples:
+
+    >>> class MyLayer(tf.keras.layers.Layer):
+    ...   def call(self, inputs):
+    ...     self.add_loss(tf.abs(tf.reduce_mean(inputs)))
+    ...     return inputs
+    >>> l = MyLayer()
+    >>> l(np.ones((10, 1)))
+    >>> l.losses
+    [1.0]
+
+    >>> inputs = tf.keras.Input(shape=(10,))
+    >>> x = tf.keras.layers.Dense(10)(inputs)
+    >>> outputs = tf.keras.layers.Dense(1)(x)
+    >>> model = tf.keras.Model(inputs, outputs)
+    >>> # Activity regularization.
+    >>> model.add_loss(tf.abs(tf.reduce_mean(x)))
+    >>> model.losses
+    [<tf.Tensor 'Abs:0' shape=() dtype=float32>]
+
+    >>> inputs = tf.keras.Input(shape=(10,))
+    >>> d = tf.keras.layers.Dense(10, kernel_initializer='ones')
+    >>> x = d(inputs)
+    >>> outputs = tf.keras.layers.Dense(1)(x)
+    >>> model = tf.keras.Model(inputs, outputs)
+    >>> # Weight regularization.
+    >>> model.add_loss(lambda: tf.reduce_mean(d.kernel))
+    >>> model.losses
+    [<tf.Tensor: shape=(), dtype=float32, numpy=1.0>]
 
     Returns:
       A list of tensors.
@@ -1008,7 +1197,6 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           collected_losses.append(loss_tensor)
     return collected_losses
 
-  @doc_controls.for_subclass_implementers
   def add_loss(self, losses, inputs=None):
     """Add loss tensor(s), potentially dependent on layer inputs.
 
@@ -1025,7 +1213,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
     ```python
     class MyLayer(tf.keras.layers.Layer):
-      def call(inputs, self):
+      def call(self, inputs):
         self.add_loss(tf.abs(tf.reduce_mean(inputs)), inputs=True)
         return inputs
     ```
@@ -1055,15 +1243,13 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
     ```python
     inputs = tf.keras.Input(shape=(10,))
-    x = tf.keras.layers.Dense(10)(inputs)
+    d = tf.keras.layers.Dense(10)
+    x = d(inputs)
     outputs = tf.keras.layers.Dense(1)(x)
     model = tf.keras.Model(inputs, outputs)
     # Weight regularization.
-    model.add_loss(lambda: tf.reduce_mean(x.kernel))
+    model.add_loss(lambda: tf.reduce_mean(d.kernel))
     ```
-
-    The `get_losses_for` method allows to retrieve the losses relevant to a
-    specific set of inputs.
 
     Arguments:
       losses: Loss tensor, or list/tuple of tensors. Rather than tensors, losses
@@ -1076,8 +1262,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         to be unconditional, and will apply across all dataflows of the layer
         (e.g. weight regularization losses).
     """
-    def _tag_unconditional(loss):
-      """Process the loss and tag it by setting loss._unconditional_loss."""
+
+    def _tag_callable(loss):
+      """Tags callable loss tensor as `_unconditional_loss`."""
       if callable(loss):
         # We run the loss without autocasting, as regularizers are often
         # numerically unstable in float16.
@@ -1087,7 +1274,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         return None  # Will be filtered out when computing the .losses property
       if not tensor_util.is_tensor(loss):
         loss = ops.convert_to_tensor_v2(loss, dtype=backend.floatx())
-      loss._unconditional_loss = (inputs is None)  # pylint: disable=protected-access
+      loss._unconditional_loss = True  # pylint: disable=protected-access
       return loss
 
     losses = nest.flatten(losses)
@@ -1097,7 +1284,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     symbolic_losses = []
     for loss in losses:
       if callable(loss):
-        callable_losses.append(functools.partial(_tag_unconditional, loss))
+        callable_losses.append(functools.partial(_tag_callable, loss))
         continue
       if loss is None:
         continue
@@ -1106,10 +1293,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       # TF Functions should take the eager path.
       if (tf_utils.is_symbolic_tensor(loss) and
           not base_layer_utils.is_in_tf_function()):
-        symbolic_losses.append(_tag_unconditional(loss))
-        base_layer_utils.check_graph_consistency(loss, method='add_loss')
+        symbolic_losses.append(loss)
       elif tensor_util.is_tensor(loss):
-        eager_losses.append(_tag_unconditional(loss))
+        eager_losses.append(loss)
 
     self._callable_losses.extend(callable_losses)
 
@@ -1143,41 +1329,92 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
 
   @property
   def metrics(self):
+    """List of metrics added using the `add_metric()` API.
+
+    Example:
+
+    >>> input = tf.keras.layers.Input(shape=(3,))
+    >>> d = tf.keras.layers.Dense(2)
+    >>> output = d(input)
+    >>> d.add_metric(tf.reduce_max(output), name='max')
+    >>> d.add_metric(tf.reduce_min(output), name='min')
+    >>> [m.name for m in d.metrics]
+    ['max', 'min']
+
+    Returns:
+      A list of tensors.
+    """
     collected_metrics = []
     all_layers = self._gather_unique_layers()
     for layer in all_layers:
-      collected_metrics.extend(layer._metrics)
+      with layer._metrics_lock:
+        collected_metrics.extend(layer._metrics)
     return collected_metrics
 
-  @doc_controls.for_subclass_implementers
-  def add_metric(self, value, aggregation=None, name=None):
+  def add_metric(self, value, name=None, **kwargs):
     """Adds metric tensor to the layer.
+
+    This method can be used inside the `call()` method of a subclassed layer
+    or model.
+
+    ```python
+    class MyMetricLayer(tf.keras.layers.Layer):
+      def __init__(self):
+        super(MyMetricLayer, self).__init__(name='my_metric_layer')
+        self.mean = metrics_module.Mean(name='metric_1')
+
+      def call(self, inputs):
+        self.add_metric(self.mean(x))
+        self.add_metric(math_ops.reduce_sum(x), name='metric_2')
+        return inputs
+    ```
+
+    This method can also be called directly on a Functional Model during
+    construction. In this case, any tensor passed to this Model must
+    be symbolic and be able to be traced back to the model's `Input`s. These
+    metrics become part of the model's topology and are tracked when you
+    save the model via `save()`.
+
+    ```python
+    inputs = tf.keras.Input(shape=(10,))
+    x = tf.keras.layers.Dense(10)(inputs)
+    outputs = tf.keras.layers.Dense(1)(x)
+    model = tf.keras.Model(inputs, outputs)
+    model.add_metric(math_ops.reduce_sum(x), name='metric_1')
+    ```
+
+    Note: Calling `add_metric()` with the result of a metric object on a
+    Functional Model, as shown in the example below, is not supported. This is
+    because we cannot trace the metric result tensor back to the model's inputs.
+
+    ```python
+    inputs = tf.keras.Input(shape=(10,))
+    x = tf.keras.layers.Dense(10)(inputs)
+    outputs = tf.keras.layers.Dense(1)(x)
+    model = tf.keras.Model(inputs, outputs)
+    model.add_metric(tf.keras.metrics.Mean()(x), name='metric_1')
+    ```
 
     Args:
       value: Metric tensor.
-      aggregation: Sample-wise metric reduction function. If `aggregation=None`,
-        it indicates that the metric tensor provided has been aggregated
-        already. eg, `bin_acc = BinaryAccuracy(name='acc')` followed by
-        `model.add_metric(bin_acc(y_true, y_pred))`. If aggregation='mean', the
-        given metric tensor will be sample-wise reduced using `mean` function.
-        eg, `model.add_metric(tf.reduce_sum(outputs), name='output_mean',
-        aggregation='mean')`.
       name: String metric name.
-
-    Raises:
-      ValueError: If `aggregation` is anything other than None or `mean`.
+      **kwargs: Additional keyword arguments for backward compatibility.
+        Accepted values:
+        `aggregation` - When the `value` tensor provided is not the result of
+        calling a `keras.Metric` instance, it will be aggregated by default
+        using a `keras.Metric.Mean`.
     """
-    if aggregation is not None and aggregation != 'mean':
-      raise ValueError(
-          'We currently support only `mean` sample-wise metric aggregation. '
-          'You provided aggregation=`%s`' % aggregation)
+    kwargs_keys = list(kwargs.keys())
+    if (len(kwargs_keys) > 1 or
+        (len(kwargs_keys) == 1 and kwargs_keys[0] != 'aggregation')):
+      raise TypeError('Unknown keyword arguments: ', str(kwargs.keys()))
 
     from_metric_obj = hasattr(value, '_metric_obj')
     is_symbolic = tf_utils.is_symbolic_tensor(value)
     in_call_context = base_layer_utils.call_context().in_call
 
     if name is None and not from_metric_obj:
-      # Eg. `self.add_metric(math_ops.reduce_sum(x), aggregation='mean')`
+      # Eg. `self.add_metric(math_ops.reduce_sum(x))`
       # In eager mode, we use metric name to lookup a metric. Without a name,
       # a new Mean metric wrapper will be created on every model/layer call.
       # So, we raise an error when no name is provided.
@@ -1190,27 +1427,40 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       # model.add_metric(mean(outputs))
       raise ValueError('Please provide a name for your metric like '
                        '`self.add_metric(tf.reduce_sum(inputs), '
-                       'name=\'mean_activation\', aggregation=\'mean\')`')
+                       'name=\'mean_activation\')`')
     elif from_metric_obj:
       name = value._metric_obj.name
 
-    if in_call_context:
+    if not in_call_context and not is_symbolic:
+      raise ValueError('Expected a symbolic Tensor for the metric value, '
+                       'received: ' + str(value))
+
+    # If a metric was added in a Layer's `call` or `build`.
+    if in_call_context or not getattr(self, '_is_graph_network', False):
       # TF Function path should take the eager path.
-      if is_symbolic and not base_layer_utils.is_in_tf_function():
-        self._symbolic_add_metric(value, aggregation, name)
-      else:
-        self._eager_add_metric(value, aggregation, name)
+
+      # If the given metric is available in `metrics` list we just update state
+      # on it, otherwise we create a new metric instance and
+      # add it to the `metrics` list.
+      metric_obj = getattr(value, '_metric_obj', None)
+      # Tensors that come from a Metric object already updated the Metric state.
+      should_update_state = not metric_obj
+      name = metric_obj.name if metric_obj else name
+
+      with self._metrics_lock:
+        match = self._get_existing_metric(name)
+        if match:
+          metric_obj = match
+        elif metric_obj:
+          self._metrics.append(metric_obj)
+        else:
+          from tensorflow.python.keras import metrics as metrics_mod  # pylint:disable=g-import-not-at-top
+          metric_obj = metrics_mod.Mean(name=name, dtype=value.dtype)
+          self._metrics.append(metric_obj)
+
+      if should_update_state:
+        metric_obj(value)
     else:
-      if not is_symbolic:
-        raise ValueError('Expected a symbolic Tensor for the metric value, '
-                         'received: ' + str(value))
-
-      # Possible a metric was added in a Layer's `build`.
-      if not getattr(self, '_is_graph_network', False):
-        with backend.get_graph().as_default():
-          self._symbolic_add_metric(value, aggregation, name)
-        return
-
       if from_metric_obj:
         raise ValueError('Using the result of calling a `Metric` object '
                          'when calling `add_metric` on a Functional '
@@ -1218,11 +1468,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
                          'Tensor to monitor directly.')
 
       # Insert layers into the Keras Graph Network.
+      aggregation = None if from_metric_obj else 'mean'
       self._graph_network_add_metric(value, aggregation, name)
 
   @deprecation.deprecated_args(None, '`inputs` is now automatically inferred',
                                'inputs')
-  @doc_controls.for_subclass_implementers
+  @doc_controls.do_not_doc_inheritable
   def add_update(self, updates, inputs=None):
     """Add update op(s), potentially dependent on layer inputs.
 
@@ -1232,9 +1483,6 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     different inputs `a` and `b`, some entries in `layer.updates` may be
     dependent on `a` and some on `b`. This method automatically keeps track
     of dependencies.
-
-    The `get_updates_for` method allows to retrieve the updates relevant to a
-    specific set of inputs.
 
     This call is ignored when eager execution is enabled (in that case, variable
     updates are run on the fly and thus do not need to be tracked for later
@@ -1267,12 +1515,6 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
             update()
       return
 
-    if call_context.in_call:
-      relevant_inputs = call_context.inputs
-    else:
-      inbound_nodes = getattr(self, '_inbound_nodes', [])
-      relevant_inputs = [node.input_tensors for node in inbound_nodes]
-
     def process_update(x):
       """Standardize update ops.
 
@@ -1294,9 +1536,6 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         update = x.op
       else:
         update = ops.convert_to_tensor_v2(x)
-
-      reachable = tf_utils.get_reachable_from_inputs(relevant_inputs, [update])
-      update._unconditional_update = update not in reachable
       return update
 
     updates = [process_update(x) for x in updates]
@@ -1430,6 +1669,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         output_weights.append(weight)
     return backend.batch_get_value(output_weights)
 
+  @doc_controls.do_not_generate_docs
   def get_updates_for(self, inputs):
     """Retrieves updates relevant to a specific set of inputs.
 
@@ -1439,16 +1679,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     Returns:
       List of update ops of the layer that depend on `inputs`.
     """
-    if inputs is None:
-      # Requesting unconditional updates.
-      return [u for u in self.updates if u._unconditional_update]
+    return self.updates
 
-    # Requesting input-conditional updates.
-    updates = [u for u in self.updates if not u._unconditional_update]
-    inputs = nest.flatten(inputs)
-    reachable = tf_utils.get_reachable_from_inputs(inputs, updates)
-    return [u for u in updates if u in reachable]
-
+  @doc_controls.do_not_doc_inheritable
   def get_losses_for(self, inputs):
     """Retrieves losses relevant to a specific set of inputs.
 
@@ -1458,16 +1691,9 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     Returns:
       List of loss tensors of the layer that depend on `inputs`.
     """
-    if inputs is None:
-      # Requesting unconditional losses.
-      return [l for l in self.losses if l._unconditional_loss]
+    return self.losses
 
-    # Requesting input-conditional losses.
-    losses = [l for l in self.losses if not l._unconditional_loss]
-    inputs = nest.flatten(inputs)
-    reachable = tf_utils.get_reachable_from_inputs(inputs, losses)
-    return [l for l in losses if l in reachable]
-
+  @doc_controls.do_not_doc_inheritable
   def get_input_mask_at(self, node_index):
     """Retrieves the input mask tensor(s) of a layer at a given node.
 
@@ -1487,6 +1713,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     else:
       return getattr(inputs, '_keras_mask', None)
 
+  @doc_controls.do_not_doc_inheritable
   def get_output_mask_at(self, node_index):
     """Retrieves the output mask tensor(s) of a layer at a given node.
 
@@ -1507,6 +1734,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       return getattr(output, '_keras_mask', None)
 
   @property
+  @doc_controls.do_not_doc_inheritable
   def input_mask(self):
     """Retrieves the input mask tensor(s) of a layer.
 
@@ -1528,6 +1756,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       return getattr(inputs, '_keras_mask', None)
 
   @property
+  @doc_controls.do_not_doc_inheritable
   def output_mask(self):
     """Retrieves the output mask tensor(s) of a layer.
 
@@ -1548,6 +1777,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     else:
       return getattr(output, '_keras_mask', None)
 
+  @doc_controls.do_not_doc_inheritable
   def get_input_shape_at(self, node_index):
     """Retrieves the input shape(s) of a layer at a given node.
 
@@ -1567,6 +1797,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return self._get_node_attribute_at_index(node_index, 'input_shapes',
                                              'input shape')
 
+  @doc_controls.do_not_doc_inheritable
   def get_output_shape_at(self, node_index):
     """Retrieves the output shape(s) of a layer at a given node.
 
@@ -1586,6 +1817,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return self._get_node_attribute_at_index(node_index, 'output_shapes',
                                              'output shape')
 
+  @doc_controls.do_not_doc_inheritable
   def get_input_at(self, node_index):
     """Retrieves the input tensor(s) of a layer at a given node.
 
@@ -1604,6 +1836,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return self._get_node_attribute_at_index(node_index, 'input_tensors',
                                              'input')
 
+  @doc_controls.do_not_doc_inheritable
   def get_output_at(self, node_index):
     """Retrieves the output tensor(s) of a layer at a given node.
 
@@ -1661,6 +1894,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return self._get_node_attribute_at_index(0, 'output_tensors', 'output')
 
   @property
+  @doc_controls.do_not_doc_inheritable
   def input_shape(self):
     """Retrieves the input shape(s) of a layer.
 
@@ -1714,6 +1948,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return layer_utils.count_params(self.weights)
 
   @property
+  @doc_controls.do_not_doc_inheritable
   def output_shape(self):
     """Retrieves the output shape(s) of a layer.
 
@@ -1786,6 +2021,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return self.add_weight(*args, **kwargs)
 
   @property
+  @doc_controls.do_not_generate_docs
   def variables(self):
     """Returns the list of all layer variables/weights.
 
@@ -1797,10 +2033,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     return self.weights
 
   @property
+  @doc_controls.do_not_generate_docs
   def trainable_variables(self):
     return self.trainable_weights
 
   @property
+  @doc_controls.do_not_generate_docs
   def non_trainable_variables(self):
     return self.non_trainable_weights
 
@@ -1818,6 +2056,18 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
       self._dtype_policy = policy.Policy(dtypes.as_dtype(dtype).name)
     else:
       self._dtype_policy = policy.global_policy()
+    if (self._dtype_policy.name == 'mixed_float16' and
+        not loss_scale_optimizer.strategy_supports_loss_scaling()):
+      # Although only loss scaling doesn't support certain strategies, to avoid
+      # confusion, we disallow the 'mixed_float16' policy with unsupported
+      # strategies. This is because 'mixed_float16' requires loss scaling for
+      # numeric stability.
+      strategy = ds_context.get_strategy()
+      raise ValueError('Mixed precision is not supported with the '
+                       'tf.distribute.Strategy: %s. Either stop using mixed '
+                       'precision by removing the use of the "%s" policy or '
+                       'use a different Strategy, e.g. a MirroredStrategy.' %
+                       (strategy.__class__.__name__, self._dtype_policy.name))
 
     # This has no impact on the layer behavior, and is only used for printing
     # warnings.
@@ -1881,7 +2131,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           "Layer {self.name} is casting an input tensor from dtype "
           "{input_dtype} to the layer's dtype of {layer_dtype}, which is new "
           "behavior in TensorFlow 2.  The layer has dtype {layer_dtype} "
-          "because it's dtype defaults to floatx.\n\n"
+          'because its dtype defaults to floatx.\n\n'
           ""
           "If you intended to run this layer in {layer_dtype}, you can safely "
           "ignore this warning. If in doubt, this warning is likely only an "
@@ -1913,7 +2163,18 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     self._dtype_policy = policy.Policy(value)
 
   def _name_scope(self):
-    return self.name
+    if not tf2.enabled():
+      return self.name
+    name_scope = self.name
+    current_name_scope = ops.get_name_scope()
+    if current_name_scope:
+      name_scope = current_name_scope + '/' + name_scope
+    if name_scope:
+      # Note that the trailing `/` prevents autogenerated
+      # numerical suffixes to get appended. It will also fully reset
+      # nested name scope (i.e. the outer name scope has no effect).
+      name_scope += '/'
+    return name_scope
 
   def _init_set_name(self, name, zero_based=True):
     if not name:
@@ -1932,63 +2193,6 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
           'Please provide different names for the metrics you have added. '
           'We found {} metrics with the name: "{}"'.format(len(match), name))
     return match[0]
-
-  def _eager_add_metric(self, value, aggregation=None, name=None):
-    # If the given metric is available in `metrics` list we just update state
-    # on it, otherwise we create a new metric instance and
-    # add it to the `metrics` list.
-    metric_obj = getattr(value, '_metric_obj', None)
-    if metric_obj:
-      name = metric_obj.name
-
-    match = self._get_existing_metric(name)
-    if match:
-      # Tensors that come from a Metric object already updated the Metric state.
-      if not metric_obj:
-        match(value)
-      return
-
-    if not metric_obj:
-      assert aggregation is not None
-      metric_obj, _ = base_layer_utils.create_mean_metric(value, name)
-    self._metrics.append(metric_obj)
-
-  def _symbolic_add_metric(self, value, aggregation=None, name=None):
-    base_layer_utils.check_graph_consistency(value, method='add_metric')
-    match = self._get_existing_metric(name)
-    if aggregation is None:
-      # Iterate over the metrics and check if the given metric exists already.
-      # This can happen when a metric instance is created in subclassed model
-      # layer `__init__` and we have tracked that instance already in
-      # model.__setattr__.
-      if match:
-        result_tensor = value
-        metric_obj = match
-      elif hasattr(value, '_metric_obj'):
-        # We track the instance using the metadata on the result tensor.
-        result_tensor = value
-        metric_obj = result_tensor._metric_obj
-        self._metrics.append(metric_obj)
-      else:
-        raise ValueError(
-            'We do not support adding an aggregated metric result tensor that '
-            'is not the output of a `tf.keras.metrics.Metric` metric instance. '
-            'Without having access to the metric instance we cannot reset the '
-            'state of a metric after every epoch during training. You can '
-            'create a `tf.keras.metrics.Metric` instance and pass the result '
-            'here or pass an un-aggregated result with `aggregation` parameter '
-            'set as `mean`. For example: `self.add_metric(tf.reduce_sum(inputs)'
-            ', name=\'mean_activation\', aggregation=\'mean\')`')
-    else:
-      # If a non-aggregated tensor is given as input (ie. `aggregation` is
-      # explicitly set to `mean`), we wrap the tensor in `Mean` metric.
-      if match:
-        result_tensor = match(value)
-        metric_obj = match
-      else:
-        metric_obj, result_tensor = base_layer_utils.create_mean_metric(
-            value, name)
-        self._metrics.append(metric_obj)
 
   def _handle_weight_regularization(self, name, variable, regularizer):
     """Create lambdas which compute regularization losses."""
@@ -2018,9 +2222,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
               array_ops.shape(output)[0], activity_loss.dtype)
           # Make activity regularization strength batch-agnostic.
           mean_activity_loss = activity_loss / batch_size
-          base_layer_utils.check_graph_consistency(
-              mean_activity_loss, method='activity_regularizer')
-          self.add_loss(mean_activity_loss, inputs=inputs)
+          self.add_loss(mean_activity_loss)
 
   def _set_mask_metadata(self, inputs, outputs, previous_mask):
     flat_outputs = nest.flatten(outputs)
@@ -2212,8 +2414,15 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
         else:
           self._dtype_policy = policy.Policy(dtype)
       input_shapes = None
+      # Converts Tensors / CompositeTensors to TensorShapes.
       if all(hasattr(x, 'shape') for x in input_list):
-        input_shapes = nest.map_structure(lambda x: x.shape, inputs)
+        input_shapes = tf_utils.get_shapes(inputs)
+      else:
+        # Converts input shape to TensorShapes.
+        try:
+          input_shapes = tf_utils.convert_shapes(inputs, to_tuples=False)
+        except ValueError:
+          pass
       # Only call `build` if the user has manually overridden the build method.
       if not hasattr(self.build, '_is_default'):
         # Any setup work performed only once should happen in an `init_scope`
@@ -2259,7 +2468,8 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     layers = trackable_layer_utils.filter_empty_layer_containers(self._layers)
     # Keep track of each top-level layers' `trainable` as well as the
     # state of all of its sublayers.
-    trainable_state = {self: self.trainable}
+    trainable_state = weakref.WeakKeyDictionary()
+    trainable_state[self] = self.trainable
     for layer in layers:
       trainable_state.update(layer._get_trainable_state())
     return trainable_state
@@ -2377,10 +2587,7 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     # TODO(scottzhu): Need to track Module object as well for weight tracking.
     # Be careful about metric if it becomes a Module in future.
     # Append value to self._layers if relevant
-
-    # Sequential models use a separate layer tracking mechanism, so skip the
-    # logic defined here for tracking layers.
-    if (self.__class__.__name__ != 'Sequential' and
+    if (getattr(self, '_auto_track_sub_layers', True) and
         (isinstance(value, Layer) or trackable_layer_utils.has_weights(value))):
       self._maybe_create_attribute('_layers', [])
       # We need to check object identity to avoid de-duplicating empty
@@ -2565,10 +2772,12 @@ class Layer(module.Module, version_utils.LayerVersionSelector):
     # so shouldn't be copied.
     state = self.__dict__.copy()
     state.pop('_thread_local', None)
+    state.pop('_metrics_lock', None)
     return state
 
   def __setstate__(self, state):
     state['_thread_local'] = threading.local()
+    state['_metrics_lock'] = threading.Lock()
     # Bypass Trackable logic as `__dict__` already contains this info.
     object.__setattr__(self, '__dict__', state)
 
@@ -2731,7 +2940,7 @@ class AddMetric(Layer):
     self.metric_name = metric_name
 
   def call(self, inputs):
-    self.add_metric(inputs, self.aggregation, self.metric_name)
+    self.add_metric(inputs, aggregation=self.aggregation, name=self.metric_name)
     return inputs
 
   def get_config(self):
@@ -2758,7 +2967,7 @@ class KerasHistory(
     layer: The Layer that produced the Tensor.
     node_index: The specific call to the Layer that produced this Tensor. Layers
       can be called multiple times in order to share weights. A new node is
-      created every time a Tensor is called.
+      created every time a Layer is called.
     tensor_index: The output index for this Tensor. Always zero if the Layer
       that produced this Tensor only has one output. Nested structures of
       Tensors are deterministically assigned an index via `nest.flatten`.

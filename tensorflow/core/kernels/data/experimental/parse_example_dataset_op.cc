@@ -273,12 +273,12 @@ class ParseExampleDatasetOp : public UnaryDatasetOpKernel {
       Node* input_graph_node = nullptr;
       TF_RETURN_IF_ERROR(b->AddInputDataset(ctx, input_, &input_graph_node));
 
-      Node* num_parallle_calls_node;
+      Node* num_parallel_calls_node;
       std::vector<Node*> dense_defaults_nodes;
       dense_defaults_nodes.reserve(dense_defaults_.size());
 
       TF_RETURN_IF_ERROR(
-          b->AddScalar(num_parallel_calls_, &num_parallle_calls_node));
+          b->AddScalar(num_parallel_calls_, &num_parallel_calls_node));
 
       for (const Tensor& dense_default : dense_defaults_) {
         Node* node;
@@ -336,7 +336,7 @@ class ParseExampleDatasetOp : public UnaryDatasetOpKernel {
       TF_RETURN_IF_ERROR(b->AddDataset(this,
                                        {
                                            {0, input_graph_node},
-                                           {1, num_parallle_calls_node},
+                                           {1, num_parallel_calls_node},
                                        },
                                        {{2, dense_defaults_nodes}}, attrs,
                                        output));
@@ -349,10 +349,14 @@ class ParseExampleDatasetOp : public UnaryDatasetOpKernel {
       explicit ParseExampleFunctor(const Dataset* dataset)
           : dataset_(dataset) {}
 
-      void MapFunc(IteratorContext* ctx, const string& prefix,
+      Status CheckExternalState() override { return Status::OK(); }
+
+      void MapFunc(IteratorContext* ctx,
+                   const std::shared_ptr<model::Node>& node,
                    std::vector<Tensor> input, std::vector<Tensor>* output,
                    StatusCallback callback) override {
-        (*ctx->runner())([this, ctx, prefix, input, output, callback]() {
+        (*ctx->runner())([this, ctx, node, input, output,
+                          callback = std::move(callback)]() {
           thread::ThreadPool* device_threadpool =
               ctx->flr()->device()->tensorflow_cpu_worker_threads()->workers;
           std::vector<tstring> slice_vec;
@@ -421,7 +425,7 @@ class ParseExampleDatasetOp : public UnaryDatasetOpKernel {
                 stats_aggregator->IncrementCounter(
                     stats_utils::kFeatureValuesCount, "trainer",
                     feature_stats.feature_values_count);
-                int64 steps = ctx->model()->NumElements(prefix);
+                int64 steps = node ? node->num_elements() : 0;
                 stats_aggregator->AddToHistogram(
                     stats_utils::FeatureHistogramName(dataset_->node_name()),
                     {static_cast<double>(feature_stats.features_count)}, steps);

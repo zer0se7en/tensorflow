@@ -63,11 +63,14 @@ table Conv2DOptions {
 }
 ```
 
+The file `lite/schema/schema_generated.h` should be re-generated for the new
+schema.
+
 ### Change C Structures and Kernel Implementation
 
-In TensorFlow Lite, the kernel implementation is decoupled from
-FlatBuffer definition. The kernels read the parameter from C structures defined
-in `lite/builtin_op_data.h`.
+In TensorFlow Lite, the kernel implementation is decoupled from FlatBuffer
+definition. The kernels read the parameter from C structures defined in
+`lite/c/builtin_op_data.h`.
 
 The original convolution parameter is as follows:
 
@@ -102,7 +105,8 @@ from the C structures. The details are omitted here.
 
 ### Change the FlatBuffer Reading Code
 
-The logic to read FlatBuffer and produce C structure is in `lite/model.cc`.
+The logic to read FlatBuffer and produce C structure is in
+`lite/core/api/flatbuffer_conversions.cc`.
 
 Update the file to handle the new parameters, as shown below:
 
@@ -162,8 +166,8 @@ execute the op. In this example, it means:
 *   Populate version=1 when dilation factors are all 1.
 *   Populate version=2 otherwise.
 
-To do this, you need to override `GetVersion` function for the operator class in
-`lite/toco/tflite/operator.cc`.
+To do this, you need to override `GetBuiltinOperatorVersion` function for the
+operator class in `lite/tools/versioning/op_version.cc`.
 
 For ops with only one version, the `GetVersion` function is defined as:
 
@@ -209,8 +213,8 @@ is supported for every node in Delegation code.
 ```
 const int kMinVersion = 1;
 TfLiteNode* node;
-TfLiteRegistration;
-context->GetNodeAndRegistration(context, node_index, &node, &registration);
+TfLiteRegistration* registration = nullptr;
+TF_LITE_ENSURE_STATUS(context->GetNodeAndRegistration(context, node_index, &node, &registration));
 
 if (registration->version > kMinVersion) {
   // Reject the node if the version isn't supported.

@@ -193,7 +193,7 @@ InterpreterWrapper* InterpreterWrapper::CreateInterpreterWrapper(
   }
 
   auto resolver = absl::make_unique<tflite::ops::builtin::BuiltinOpResolver>();
-  for (const auto registerer : registerers) {
+  for (const auto& registerer : registerers) {
     if (!RegisterCustomOpByName(registerer.c_str(), resolver.get(), error_msg))
       return nullptr;
   }
@@ -345,9 +345,12 @@ PyObject* InterpreterWrapper::TensorSizeSignature(int i) const {
   const TfLiteTensor* tensor = interpreter_->tensor(i);
   const int32_t* size_signature_data = nullptr;
   int32_t size_signature_size = 0;
-  if (tensor->dims_signature != nullptr) {
+  if (tensor->dims_signature != nullptr && tensor->dims_signature->size != 0) {
     size_signature_data = tensor->dims_signature->data;
     size_signature_size = tensor->dims_signature->size;
+  } else {
+    size_signature_data = tensor->dims->data;
+    size_signature_size = tensor->dims->size;
   }
   PyObject* np_array =
       PyArrayFromIntVector(size_signature_data, size_signature_size);

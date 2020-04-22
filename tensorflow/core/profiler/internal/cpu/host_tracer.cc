@@ -55,8 +55,6 @@ class HostTracer : public ProfilerInterface {
 
   Status CollectData(XSpace* space) override;
 
-  DeviceType GetDeviceType() override { return DeviceType::kCpu; }
-
  private:
   // Level of host tracing.
   const int host_trace_level_;
@@ -110,8 +108,7 @@ Status HostTracer::CollectData(RunMetadata* run_metadata) {
 
   constexpr char kUserMetadataMarker = '#';
   for (TraceMeRecorder::ThreadEvents& thread : events_) {
-    int32 thread_id = thread.thread.tid;
-    thread_names->insert({thread_id, thread.thread.name});
+    thread_names->insert({thread.thread.tid, thread.thread.name});
     for (TraceMeRecorder::Event& event : thread.events) {
       if (event.start_time && event.end_time) {
         NodeExecStats* ns = dev_stats->add_node_stats();
@@ -131,7 +128,7 @@ Status HostTracer::CollectData(RunMetadata* run_metadata) {
         ns->set_all_start_micros(event.start_time / EnvTime::kMicrosToNanos);
         ns->set_all_end_rel_micros((event.end_time - event.start_time) /
                                    EnvTime::kMicrosToNanos);
-        ns->set_thread_id(thread_id);
+        ns->set_thread_id(thread.thread.tid);
       }
     }
   }
@@ -155,9 +152,9 @@ Status HostTracer::CollectData(XSpace* space) {
 
 // Not in anonymous namespace for testing purposes.
 std::unique_ptr<ProfilerInterface> CreateHostTracer(
-    const profiler::ProfilerOptions& options) {
-  if (options.host_tracer_level == 0) return nullptr;
-  return absl::make_unique<HostTracer>(options.host_tracer_level);
+    const ProfileOptions& options) {
+  if (options.host_tracer_level() == 0) return nullptr;
+  return absl::make_unique<HostTracer>(options.host_tracer_level());
 }
 
 auto register_host_tracer_factory = [] {

@@ -55,13 +55,21 @@ class XStatVisitor {
 
   absl::string_view StrValue() const { return stat_->str_value(); }
 
+  absl::string_view RefValue() const;
+
+  // Returns a string view.
+  // REQUIRED: the value type should be string type or reference type.
+  absl::string_view StrOrRefValue() const;
+
   const XStat& RawStat() const { return *stat_; }
 
+  // Return a string representation of all value type.
   std::string ToString() const;
 
  private:
   const XStat* stat_;
   const XStatMetadata* metadata_;
+  const XPlaneVisitor* plane_;
   absl::optional<int64> type_;
 };
 
@@ -133,9 +141,9 @@ class XEventVisitor : public XStatsOwner<XEvent> {
 
   const XEventMetadata* metadata() const { return metadata_; }
 
- private:
   Timespan GetTimespan() const { return Timespan(TimestampPs(), DurationPs()); }
 
+ private:
   const XPlaneVisitor* plane_;
   const XLine* line_;
   const XEvent* event_;

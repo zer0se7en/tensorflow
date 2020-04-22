@@ -592,6 +592,9 @@ class TextVectorization(CombinerPreprocessingLayer):
     return inputs
 
   def call(self, inputs):
+    if inputs.shape.rank == 1:
+      inputs = array_ops.expand_dims(inputs, axis=-1)
+
     self._called = True
     inputs = self._preprocess(inputs)
 
@@ -631,6 +634,12 @@ class TextVectorization(CombinerPreprocessingLayer):
     # If we're not returning integers here, we rely on the vectorization layer
     # to create the output.
     return self._vectorize_layer(indexed_data)
+
+
+class _TextVectorizationAccumulator(
+    collections.namedtuple("_TextVectorizationAccumulator",
+                           ["count_dict", "per_doc_count_dict", "metadata"])):
+  pass
 
 
 # A note on this combiner: This contains functionality that will be extracted
@@ -797,8 +806,6 @@ class _TextVectorizationCombiner(Combiner):
 
   def _create_accumulator(self):
     """Accumulate a sorted array of vocab tokens and corresponding counts."""
-    accumulator = collections.namedtuple(
-        "Accumulator", ["count_dict", "per_doc_count_dict", "metadata"])
 
     count_dict = collections.defaultdict(int)
     if self._compute_idf:
@@ -807,4 +814,5 @@ class _TextVectorizationCombiner(Combiner):
     else:
       per_doc_count_dict = None
     metadata = [0]
-    return accumulator(count_dict, per_doc_count_dict, metadata)
+    return _TextVectorizationAccumulator(count_dict, per_doc_count_dict,
+                                         metadata)

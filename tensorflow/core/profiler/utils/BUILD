@@ -13,6 +13,15 @@ package_group(
 )
 
 cc_library(
+    name = "errors",
+    srcs = ["errors.cc"],
+    hdrs = ["errors.h"],
+    deps = [
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "event_span",
     srcs = ["event_span.cc"],
     hdrs = ["event_span.h"],
@@ -219,6 +228,7 @@ cc_library(
     hdrs = ["group_events.h"],
     visibility = [":friends"],
     deps = [
+        ":tf_op_utils",
         ":tf_xplane_visitor",
         ":xplane_schema",
         ":xplane_utils",
@@ -273,6 +283,7 @@ cc_library(
         ":group_events",
         ":tf_op_utils",
         ":tf_xplane_visitor",
+        ":timespan",
         ":trace_utils",
         ":xplane_builder",
         ":xplane_schema",
@@ -281,6 +292,7 @@ cc_library(
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core/profiler/protobuf:xplane_proto_cc",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings",
     ],
 )
@@ -299,6 +311,17 @@ tf_cc_test(
         "//tensorflow/core:test",
         "//tensorflow/core:test_main",
         "//tensorflow/core/profiler/protobuf:xplane_proto_cc",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "kernel_stats_utils",
+    srcs = ["kernel_stats_utils.cc"],
+    hdrs = ["kernel_stats_utils.h"],
+    deps = [
+        "//tensorflow/core:lib",
+        "//tensorflow/core/profiler/protobuf:kernel_stats_proto_cc",
         "@com_google_absl//absl/strings",
     ],
 )

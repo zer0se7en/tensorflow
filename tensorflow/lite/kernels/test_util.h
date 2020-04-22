@@ -614,11 +614,12 @@ class SingleOpModel {
     std::vector<int> traversal_order(dims_count);
     std::vector<T> dense_data(data);
 
-    // Compress all dimensions and traverse them in the original order.
+    // Compress only the last dimension and traverse in the original order.
     for (int i = 0; i < dims_count; i++) {
-      format[i] = kTfLiteDimSparseCSR;
+      format[i] = kTfLiteDimDense;
       traversal_order[i] = i;
     }
+    format[dims_count - 1] = kTfLiteDimSparseCSR;
 
     tflite::optimize::sparsity::FormatConverter<T> converter(
         shape, traversal_order, format);
@@ -630,13 +631,26 @@ class SingleOpModel {
     // Build sparsity parameter.
     std::vector<flatbuffers::Offset<DimensionMetadata>> fb_dim_metadata(
         dims_count);
-    for (int i = 0; i < dims_count; i++) {
+    for (int i = 0; i < dims_count - 1; i++) {
       const int metadata_idx = 2 * i;
       fb_dim_metadata[i] = CreateDimensionMetadata(
-          builder_, DimensionType_SPARSE_CSR, 0,
-          builder_.CreateVector(dim_metadata[metadata_idx]),
-          builder_.CreateVector(dim_metadata[metadata_idx + 1]));
+          builder_, DimensionType_DENSE, dim_metadata[metadata_idx][0]);
     }
+
+    // Parameters for the last compressed dimension.
+    const int compressed_metadata_idx = 2 * (dims_count - 1);
+    auto array_segments =
+        CreateInt32Vector(builder_, builder_.CreateVector(
+                                        dim_metadata[compressed_metadata_idx]))
+            .Union();
+    auto array_indices =
+        CreateInt32Vector(
+            builder_,
+            builder_.CreateVector(dim_metadata[compressed_metadata_idx + 1]))
+            .Union();
+    fb_dim_metadata[dims_count - 1] = CreateDimensionMetadata(
+        builder_, DimensionType_SPARSE_CSR, 0, SparseIndexVector_Int32Vector,
+        array_segments, SparseIndexVector_Int32Vector, array_indices);
 
     flatbuffers::Offset<SparsityParameters> s_param = CreateSparsityParameters(
         builder_, builder_.CreateVector(traversal_order), 0,
@@ -776,6 +790,7 @@ template <typename T>
 TensorType GetTensorType() {
   if (std::is_same<T, float>::value) return TensorType_FLOAT32;
   if (std::is_same<T, TfLiteFloat16>::value) return TensorType_FLOAT16;
+  if (std::is_same<T, double>::value) return TensorType_FLOAT64;
   if (std::is_same<T, int8_t>::value) return TensorType_INT8;
   if (std::is_same<T, int16_t>::value) return TensorType_INT16;
   if (std::is_same<T, int32_t>::value) return TensorType_INT32;
@@ -801,40 +816,40 @@ struct TypeUnion;
 template <>
 struct TypeUnion<float> {
  public:
-  static const TensorType tensor_type = TensorType::TensorType_FLOAT32;
-  static const TfLiteType tflite_type = TfLiteType::kTfLiteFloat32;
+  static constexpr TensorType tensor_type = TensorType::TensorType_FLOAT32;
+  static constexpr TfLiteType tflite_type = TfLiteType::kTfLiteFloat32;
   typedef float ScalarType;
 };
 
 template <>
 struct TypeUnion<int32_t> {
  public:
-  static const TensorType tensor_type = TensorType::TensorType_INT32;
-  static const TfLiteType tflite_type = TfLiteType::kTfLiteInt32;
+  static constexpr TensorType tensor_type = TensorType::TensorType_INT32;
+  static constexpr TfLiteType tflite_type = TfLiteType::kTfLiteInt32;
   typedef int32_t ScalarType;
 };
 
 template <>
 struct TypeUnion<int16_t> {
  public:
-  static const TensorType tensor_type = TensorType::TensorType_INT16;
-  static const TfLiteType tflite_type = TfLiteType::kTfLiteInt16;
+  static constexpr TensorType tensor_type = TensorType::TensorType_INT16;
+  static constexpr TfLiteType tflite_type = TfLiteType::kTfLiteInt16;
   typedef int16_t ScalarType;
 };
 
 template <>
 struct TypeUnion<int8_t> {
  public:
-  static const TensorType tensor_type = TensorType::TensorType_INT8;
-  static const TfLiteType tflite_type = TfLiteType::kTfLiteInt8;
+  static constexpr TensorType tensor_type = TensorType::TensorType_INT8;
+  static constexpr TfLiteType tflite_type = TfLiteType::kTfLiteInt8;
   typedef int8_t ScalarType;
 };
 
 template <>
 struct TypeUnion<uint8_t> {
  public:
-  static const TensorType tensor_type = TensorType::TensorType_UINT8;
-  static const TfLiteType tflite_type = TfLiteType::kTfLiteUInt8;
+  static constexpr TensorType tensor_type = TensorType::TensorType_UINT8;
+  static constexpr TfLiteType tflite_type = TfLiteType::kTfLiteUInt8;
   typedef uint8_t ScalarType;
 };
 
