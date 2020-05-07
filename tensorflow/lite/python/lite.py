@@ -38,6 +38,7 @@ from tensorflow.lite.python import lite_constants as constants
 from tensorflow.lite.python.convert import build_toco_convert_protos  # pylint: disable=unused-import
 from tensorflow.lite.python.convert import ConverterError  # pylint: disable=unused-import
 from tensorflow.lite.python.convert import mlir_quantize as _mlir_quantize
+from tensorflow.lite.python.convert import mlir_sparsify as _mlir_sparsify
 from tensorflow.lite.python.convert import OpsSet
 from tensorflow.lite.python.convert import toco_convert  # pylint: disable=unused-import
 from tensorflow.lite.python.convert import toco_convert_graph_def as _toco_convert_graph_def
@@ -90,6 +91,22 @@ class Optimize(enum.Enum):
   """Enum defining the optimizations to apply when generating tflite graphs.
 
   Some optimizations may come at the cost of accuracy.
+
+  DEFAULT
+      Default optimization strategy.
+
+      Converter will do its best to improve size and latency based on the
+      information provided.
+      Enhanced optimizations are gained by providing a representative_dataset.
+      This is recommended, and is currently equivalent to the modes below.
+      Currently, weights will be quantized and if representative_dataset is
+      provided, activations for quantizable operations will also be quantized.
+
+  OPTIMIZE_FOR_SIZE
+      Deprecated. Does the same as DEFAULT.
+
+  OPTIMIZE_FOR_LATENCY
+      Deprecated. Does the same as DEFAULT.
   """
 
   # Default optimization strategy.
@@ -102,19 +119,10 @@ class Optimize(enum.Enum):
   # provided, activations for quantizable operations will also be quantized.
   DEFAULT = "DEFAULT"
 
-  # Optimize for size.
-  #
-  # Optimizations that reduce the size of the model.
-  # The model size will be reduced.
-  # Currently, weights will be quantized and if representative_dataset is
-  # provided, activations for quantizable operations will also be quantized.
+  # Deprecated. Does the same as DEFAULT.
   OPTIMIZE_FOR_SIZE = "OPTIMIZE_FOR_SIZE"
 
-  # Optimize for latency.
-  #
-  # Optimizations that reduce the latency of the model.
-  # Currently, weights will be quantized and if representative_dataset is
-  # provided, activations for quantizable operations will also be quantized.
+  # Deprecated. Does the same as DEFAULT.
   OPTIMIZE_FOR_LATENCY = "OPTIMIZE_FOR_LATENCY"
 
   def __str__(self):
@@ -292,6 +300,7 @@ class TFLiteConverterBase(object):
     self._saved_model_tags = None
     self._saved_model_version = None
     self._saved_model_exported_names = []
+    self._experimental_sparsify_model = False
 
   def _grappler_config(self, optimizers=None):
     """Creates a tf.compat.v1.ConfigProto for configuring Grappler.
@@ -337,15 +346,9 @@ class TFLiteConverterBase(object):
           self.representative_dataset.input_gen, inference_input_type,
           inference_output_type, allow_float)
 
-  def _is_unknown_shapes_allowed(self, fp32_execution):
-    # TODO(b/128319310): Investigate which quantization methods work.
-    if not fp32_execution:
-      return False
-
+  def _is_unknown_shapes_allowed(self):
     # Unknown dimensions are only allowed with the new converter.
-    if not self.experimental_new_converter:
-      return False
-    return True
+    return self.experimental_new_converter
 
   def _get_base_converter_args(self):
     """Returns the base converter args.
@@ -584,12 +587,17 @@ class TFLiteConverterV2(TFLiteConverterBase):
 
     Raises:
       ValueError:
+        No concrete functions is specified.
         Multiple concrete functions are specified.
         Input shape is not specified.
         Invalid quantization parameters.
     """
     # TODO(b/130297984): Add support for converting multiple function.
-    if len(self._funcs) != 1:
+
+    if len(self._funcs) == 0:
+      raise ValueError("No ConcreteFunction is specified.")
+
+    if len(self._funcs) > 1:
       raise ValueError("This converter can only convert a single "
                        "ConcreteFunction. Converting multiple functions is "
                        "under development.")
@@ -643,7 +651,7 @@ class TFLiteConverterV2(TFLiteConverterBase):
     quant_mode = QuantizationMode(self.optimizations, self.target_spec,
                                   self.representative_dataset, graph_def)
 
-    if not self._is_unknown_shapes_allowed(quant_mode.fp32_execution()):
+    if not self._is_unknown_shapes_allowed():
       # Checks dimensions in input tensor.
       for tensor in input_tensors:
         # Note that shape_list might be empty for scalar shapes.
@@ -709,6 +717,9 @@ class TFLiteConverterV2(TFLiteConverterBase):
     elif quant_mode.post_training_int8_allow_float():
       result = self._calibrate_quantize_model(result, constants.FLOAT,
                                               constants.FLOAT, True)
+
+    if self._experimental_sparsify_model:
+      result = _mlir_sparsify(result)
 
     return result
 
@@ -1180,8 +1191,7 @@ class TFLiteConverter(TFLiteConverterBase):
                                   self.representative_dataset, self._graph_def)
 
     # Checks dimensions in input tensor.
-    if (not self._is_unknown_shapes_allowed(quant_mode.fp32_execution()) and
-        self._has_valid_tensors()):
+    if (not self._is_unknown_shapes_allowed() and self._has_valid_tensors()):
       for tensor in self._input_tensors:
         shape = tensor.shape
         if not shape:
@@ -1338,6 +1348,9 @@ class TFLiteConverter(TFLiteConverterBase):
       result = self._calibrate_quantize_model(result, inference_input_type,
                                               inference_output_type, True)
 
+    if self._experimental_sparsify_model:
+      result = _mlir_sparsify(result)
+
     return result
 
   def get_input_arrays(self):
@@ -1379,13 +1392,12 @@ class TFLiteConverter(TFLiteConverterBase):
         shape[0] = batch_size
         tensor.set_shape(shape)
 
-  def _is_unknown_shapes_allowed(self, fp32_execution):
+  def _is_unknown_shapes_allowed(self):
     # Ophint Converted nodes will need the shapes to be known.
     if _is_ophint_converted(self._graph_def):
       return False
 
-    if not super(TFLiteConverter,
-                 self)._is_unknown_shapes_allowed(fp32_execution):
+    if not super(TFLiteConverter, self)._is_unknown_shapes_allowed():
       return False
 
     # `conversion_summary_dir` calls TOCO. Unknown shapes are only supported by
