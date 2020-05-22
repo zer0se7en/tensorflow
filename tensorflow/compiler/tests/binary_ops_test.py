@@ -73,8 +73,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
       self.assertAllCloseAccordingToType(
           result[i], expected[i], rtol=rtol, atol=atol)
 
-  @test_util.disable_mlir_bridge(
-      "F16 type is not supported in CreateDenseElementsAttrFromLiteral")
   def testFloatOps(self):
     for dtype in self.float_types:
       if dtype == dtypes.bfloat16.as_numpy_dtype:
@@ -1098,8 +1096,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
             x,
             expected=np.matmul(x, x.transpose([0, 1, 3, 2])))
 
-  @test_util.disable_mlir_bridge(
-      "TODO(b/155097273): Handle complex dtype constants")
   def testExpandDims(self):
     for dtype in self.numeric_types:
       self._testBinary(
@@ -1197,8 +1193,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
         np.full([1, 1, 3, 5], 3., dtype=np.float32),
         expected=np.full([4, 5, 1, 2, 5], 18., dtype=np.float32))
 
-  @test_util.disable_mlir_bridge(
-      "TODO(b/155097273): Handle complex dtype constants")
   def testPad(self):
     for dtype, pad_type in itertools.product(
         self.numeric_types, [np.int32, np.int64]):
@@ -1339,8 +1333,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
               ],
               dtype=dtype))
 
-  @test_util.disable_mlir_bridge(
-      "TODO(b/155097273): Handle complex dtype constants")
   def testReshape(self):
     for dtype in self.numeric_types:
       self._testBinary(
@@ -1473,8 +1465,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
                [1, 2]],
               dtype=dtype))
 
-  @test_util.disable_mlir_bridge(
-      "TODO(b/155097273): Handle complex dtype constants")
   def testTranspose(self):
     for dtype in self.numeric_types:
       self._testBinary(
@@ -1493,8 +1483,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
           np.array([1, 0], dtype=np.int32),
           expected=np.array([[1, 3], [2, 4]], dtype=dtype))
 
-  @test_util.disable_mlir_bridge(
-      "TODO(b/155097273): Handle complex dtype constants")
   def testConjugateTranspose(self):
     for dtype in self.complex_types:
       self._testBinary(
@@ -1513,7 +1501,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
           np.array([1, 0], dtype=np.int32),
           expected=np.array([[1 + 1j, 3 + 3j], [2 - 2j, 4 - 4j]], dtype=dtype))
 
-  @test_util.disable_mlir_bridge("Enable tf.Cross Compilation")
   def testCross(self):
     for dtype in self.float_types:
       self._testBinary(
@@ -1592,8 +1579,6 @@ class BinaryOpsTest(xla_test.XLATestCase):
                        np.array([4, 5, 6], dtype=np.int32),
                        expected=None)
 
-  @test_util.disable_mlir_bridge(
-      "Requires BroadcastInDim method in MlirHloBuilder")
   def testBroadcastTo(self):
     for dtype in self.all_types:
       x = np.random.randint(0, high=100, size=[2, 3])
@@ -1604,29 +1589,16 @@ class BinaryOpsTest(xla_test.XLATestCase):
           expected=x)
       self._testBinary(
           array_ops.broadcast_to,
-          x,
-          np.array([6, 6], dtype=np.int32),
-          expected=np.tile(x, [3, 2]))
+          np.zeros([2, 3], dtype=dtype),
+          np.array([2, 2, 3], dtype=np.int32),
+          expected=np.zeros([2, 2, 3], dtype=dtype))
+
+      x = np.arange(2).reshape((2, 1)).astype(dtype)
       self._testBinary(
           array_ops.broadcast_to,
           x,
-          np.array([7, 4, 3], dtype=np.int32),
-          expected=np.tile(x, [7, 2, 1]))
-      self._testBinary(
-          array_ops.broadcast_to,
-          x,
-          np.array([7, 0, 3], dtype=np.int32),
-          expected=np.zeros([7, 0, 3], dtype=dtype))
-      self._testBinary(
-          array_ops.broadcast_to,
-          x,
-          np.array([7, 1, 2, 9], dtype=np.int32),
-          expected=np.tile(x, [7, 1, 1, 3]))
-      self._testBinary(
-          array_ops.broadcast_to,
-          np.zeros([2, 0], dtype=dtype),
-          np.array([4, 0], dtype=np.int32),
-          expected=np.zeros([4, 0], dtype=dtype))
+          np.array([2, 2, 3], dtype=np.int32),
+          expected=np.tile(x, (2, 1, 3)))
 
       x = np.arange(3).reshape((3, 1, 1, 1)).astype(dtype)
       self._testBinary(

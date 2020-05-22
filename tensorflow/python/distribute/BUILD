@@ -452,6 +452,7 @@ cuda_py_test(
         "//tensorflow/python:array_ops",
         "//tensorflow/python:errors",
         "//tensorflow/python:framework_ops",
+        "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:math_ops",
         "//tensorflow/python/data/ops:dataset_ops",
         "//tensorflow/python/eager:context",
@@ -1545,6 +1546,7 @@ cuda_py_test(
     srcs = ["parameter_server_strategy_test.py"],
     tags = [
         "multi_and_single_gpu",
+        "no_windows",  # TODO(b/156428279): reenable this test once the image is updated.
     ],
     # b/141096229: Non-atomic AssignAdd
     xla_enable_strict_auto_jit = False,
@@ -1644,6 +1646,28 @@ py_test(
         "//tensorflow/python:training",
         "//tensorflow/python/eager:test",
         "//third_party/py/numpy",
+        "@absl_py//absl/testing:parameterized",
+    ],
+)
+
+cuda_py_test(
+    name = "strategy_common_test",
+    srcs = ["strategy_common_test.py"],
+    tags = [
+        "multi_and_single_gpu",
+        # TODO(b/155301154): Enable this test on multi-gpu guitar once multi process
+        # runner can run on guitar.
+        "noguitar",
+    ],
+    xla_enable_strict_auto_jit = True,
+    deps = [
+        ":combinations",
+        ":reduce_util",
+        ":strategy_combinations",
+        "//tensorflow/python:array_ops",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python:dtypes",
+        "//tensorflow/python/eager:def_function",
         "@absl_py//absl/testing:parameterized",
     ],
 )
