@@ -472,8 +472,9 @@ class AlgebraicSimplifierVisitor : public DfsHloRewriteVisitor {
       HloInstruction* dot);
 
   HloComputation* GetOrCreateScalarAddComputation(PrimitiveType type) {
-    if (scalar_add_computation_) {
-      return scalar_add_computation_;
+    HloComputation*& scalar_add_computation = scalar_add_computations_[type];
+    if (scalar_add_computation) {
+      return scalar_add_computation;
     }
 
     HloComputation::Builder b("scalar_add_computation");
@@ -485,9 +486,9 @@ class AlgebraicSimplifierVisitor : public DfsHloRewriteVisitor {
         HloInstruction::CreateParameter(1, shape, "scalar_rhs"));
     auto scalar_op = b.AddInstruction(HloInstruction::CreateBinary(
         shape, HloOpcode::kAdd, scalar_lhs, scalar_rhs));
-    scalar_add_computation_ =
+    scalar_add_computation =
         computation_->parent()->AddEmbeddedComputation(b.Build(scalar_op));
-    return scalar_add_computation_;
+    return scalar_add_computation;
   }
 
   // Tries to fold a kPad in the input or filter into the convolution
@@ -528,8 +529,8 @@ class AlgebraicSimplifierVisitor : public DfsHloRewriteVisitor {
   // Whether algebraic simplification has occurred.
   bool changed_ = false;
 
-  // Cached computation for adding two scalar F32.
-  HloComputation* scalar_add_computation_ = nullptr;
+  // Cached computation for adding two scalars of a given type.
+  absl::flat_hash_map<PrimitiveType, HloComputation*> scalar_add_computations_;
 
   AlgebraicSimplifier* simplifier_ = nullptr;
 };
@@ -2972,6 +2973,7 @@ Status AlgebraicSimplifierVisitor::HandlePad(HloInstruction* pad) {
     // slice instruction should all have the same layout.
     TF_RETURN_IF_ERROR(LayoutUtil::CopyLayoutBetweenShapes(
         pad->shape(), nonzero_pad->mutable_shape()));
+    simplifier_->UpdateLayout(nonzero_pad->mutable_shape());
 
     // Second, construct the slice instruction to perform the negative padding.
     std::vector<int64> start_indices;
@@ -2998,9 +3000,14 @@ Status AlgebraicSimplifierVisitor::HandlePad(HloInstruction* pad) {
         MakeSliceHlo(nonzero_pad, start_indices, end_indices, strides));
     TF_RETURN_IF_ERROR(LayoutUtil::CopyLayoutBetweenShapes(
         pad->shape(), slice->mutable_shape()));
+    simplifier_->UpdateLayout(slice->mutable_shape());
 
     // Verify that the slice shape matches the pad shape.
-    TF_RET_CHECK(ShapeUtil::Equal(slice->shape(), pad->shape()));
+    auto equal = Shape::Equal();
+    if (!options_.is_layout_sensitive()) {
+      equal.IgnoreTilesInLayout();
+    }
+    TF_RET_CHECK(equal(slice->shape(), pad->shape()));
 
     return ReplaceInstruction(pad, slice);
   }
