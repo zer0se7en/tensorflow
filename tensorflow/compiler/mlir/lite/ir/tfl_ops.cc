@@ -253,9 +253,8 @@ struct TensorFlowLiteInlinerInterface : public DialectInlinerInterface {
   }
 };
 
-struct TensorFlowLiteOpFolderDialectInterface
-    : public OpFolderDialectInterface {
-  using OpFolderDialectInterface::OpFolderDialectInterface;
+struct TensorFlowLiteDialectFoldInterface : public DialectFoldInterface {
+  using DialectFoldInterface::DialectFoldInterface;
 
   // Registered hook to check if the given region, which is attached to an
   // operation that is *not* isolated from above (i.e. no internal regions
@@ -269,13 +268,13 @@ struct TensorFlowLiteOpFolderDialectInterface
 };
 
 TensorFlowLiteDialect::TensorFlowLiteDialect(mlir::MLIRContext *context)
-    : Dialect(/*name=*/"tfl", context) {
+    : Dialect(/*name=*/"tfl", context, TypeID::get<TensorFlowLiteDialect>()) {
   addOperations<
 #define GET_OP_LIST
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.cc.inc"
       >();
   addInterfaces<TensorFlowLiteInlinerInterface,
-                TensorFlowLiteOpFolderDialectInterface>();
+                TensorFlowLiteDialectFoldInterface>();
 }
 
 //===----------------------------------------------------------------------===//
@@ -773,8 +772,8 @@ static LogicalResult Verify(CustomOp op) {
       op.custom_option().cast<OpaqueElementsAttr>();
   if (!opaque_attr.getType().hasStaticShape())
     return op.emitOpError("custom_option should have a static shape.");
-  if (opaque_attr.getValue().size() !=
-      opaque_attr.getType().cast<ShapedType>().getDimSize(0))
+  const int attribute_size = opaque_attr.getValue().size();
+  if (attribute_size != opaque_attr.getType().cast<ShapedType>().getDimSize(0))
     return op.emitOpError(
         "custom_option should have the same length of content with shape.");
   return success();
@@ -955,7 +954,7 @@ static LogicalResult Verify(ScatterNdOp op) {
     // Checks whether the last `(shape_type.getDimSize(0) - outermost_dim)`
     // dimensions of `updates` and `shape` are equal.
     for (auto shape_it : llvm::enumerate(shape_value)) {
-      auto i = shape_it.index();
+      int64_t i = shape_it.index();
       auto value = shape_it.value().getSExtValue();
       if (i >= outermost_dim) {
         auto corresponding_dim = i - outermost_dim + outer_dims;
@@ -1028,9 +1027,12 @@ static LogicalResult Verify(PackOp op) {
   // Check axis bounds.
   if (input_type.hasRank()) {
     int64_t axis_value = op.axis().getSExtValue();
-    if (abs(axis_value) > input_type.getRank())
-      return op.emitOpError("op attribute 'axis' is out of bounds, got ")
-             << axis_value;
+    if (axis_value < 0) axis_value += input_type.getRank() + 1;
+    if (axis_value < 0 || axis_value >= input_type.getRank() + 1)
+      return op.emitOpError()
+             << "op attribute 'axis' should be in range [-rank - 1, rank + 1), "
+             << "got rank = " << input_type.getRank()
+             << ", and axis = " << op.axis().getSExtValue();
   }
 
   // Make sure all inputs have the same shape and element type.
@@ -1192,7 +1194,8 @@ struct RemoveRedundantUnpackPack : public RewritePattern {
       return failure();
 
     const int total_pack_inputs = pack_op.getNumOperands();
-    if (total_pack_inputs != input_unpack_op.getNumResults()) return failure();
+    const int num_results = input_unpack_op.getNumResults();
+    if (total_pack_inputs != num_results) return failure();
     for (auto input_output :
          llvm::zip(pack_op.getOperands(), input_unpack_op.getResults())) {
       Value pack_input = std::get<0>(input_output);
@@ -1261,8 +1264,7 @@ static LogicalResult Verify(SliceOp op) {
   }
 
   if (begin && size && input_type.hasStaticShape()) {
-    const int input_rank = begin.getNumElements();
-    for (uint64_t i = 0; i < input_rank; i++) {
+    for (uint64_t i = 0, end = begin.getNumElements(); i < end; i++) {
       int begin_i =
           begin.getValue({i}).cast<IntegerAttr>().getValue().getSExtValue();
       int size_i =

@@ -109,7 +109,8 @@ void CollectiveRemoteAccessDistributed::RecvFromPeer(
       for (const auto& chunk : extra.tensor_content()) {
         num_bytes += chunk.size();
       }
-      if (num_bytes != to_tensor->TotalBytes()) {
+      const int64 total_bytes = to_tensor->TotalBytes();
+      if (num_bytes != total_bytes) {
         done(errors::Internal("RecvBufResponse returned ", num_bytes,
                               " bytes where to_tensor expected ",
                               to_tensor->TotalBytes()));
@@ -145,7 +146,7 @@ void CollectiveRemoteAccessDistributed::RecvFromPeer(
                              delete cpu_tensor;
                              // This callback must not block, so execute
                              // done in another thread.
-                             RunClosure([s, done] { done(s); });
+                             work_queue_->Schedule([s, done] { done(s); });
                            });
         delete state;
         return;

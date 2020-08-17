@@ -116,8 +116,7 @@ func @convert(%arg0: tensor<2xi32>) -> tensor<2xf32> {
 
 // CHECK-LABEL: func @constant
 func @constant(%arg0: tensor<2xf32>) -> tensor<2xf32> {
-  // CHECK: %[[SCALAR_ONE:.*]] = mhlo.constant dense<1.000000e+00> : tensor<f32>
-  // CHECK: %[[ONE:.*]] = "mhlo.broadcast_in_dim"(%[[SCALAR_ONE]]) {broadcast_dimensions = dense<> : tensor<0xi64>} : (tensor<f32>) -> tensor<2xf32>
+  // CHECK: %[[ONE:.*]] = mhlo.constant dense<1.000000e+00> : tensor<2xf32>
   // CHECK: %[[RESULT:.*]] = mhlo.divide %[[ONE]], %arg0 : tensor<2xf32>
   // CHECK: return %[[RESULT]]
 
@@ -199,7 +198,6 @@ func @dynamic_update_slice(%arg0: tensor<3x4xi32>, %arg1: tensor<2x2xi32>, %arg2
 // CHECK-SAME: (%[[ARG0:.*]]: tensor<3x2xi32>, %[[ARG1:.*]]: tensor<3xf32>, %[[ARG2:.*]]: tensor<f32>)
 func @sparse_to_dense(%arg0: tensor<3x2xi32>, %arg1: tensor<3xf32>, %arg2: tensor<f32>) -> tensor<3x3xf32> {
 
-// CHECK:      %[[CST:.*]] = mhlo.constant dense<3> : tensor<2xi32>
 // CHECK:      %[[DEFAULT:.*]] = "mhlo.broadcast_in_dim"(%[[ARG2]]) {broadcast_dimensions = dense<> : tensor<0xi64>} : (tensor<f32>) -> tensor<3x3xf32>
 
 // CHECK:      %[[RESULT:.*]] = "mhlo.scatter"(%[[DEFAULT]], %[[ARG0]], %[[ARG1]]) ( {
@@ -257,6 +255,39 @@ func @arg_min(%arg0: tensor<6xf64>) -> tensor<i32> {
   %0 = mhlo.constant dense<0> : tensor<i32>
   %1 = "tf.ArgMin"(%arg0, %0) : (tensor<6xf64>, tensor<i32>) -> tensor<i32>
   return %1 : tensor<i32>
+}
+
+// CHECK-LABEL: non_max_suppression_v4
+func @non_max_suppression_v4(%arg0: tensor<3x4xf32>, %arg1: tensor<3xf32>, %arg2: tensor<f32>, %arg3: tensor<f32>) -> tensor<2xi32> {
+  %max_size = mhlo.constant dense<2> : tensor<i32>
+  // CHECK-NOT: tf.NonMaxSuppressionV4
+  %0:2 = "tf.NonMaxSuppressionV4"(%arg0, %arg1, %max_size, %arg2, %arg3) {pad_to_max_output_size = true}: (tensor<3x4xf32>, tensor<3xf32>, tensor<i32>, tensor<f32>, tensor<f32>) -> (tensor<2xi32>, tensor<i32>)
+  return %0#0 : tensor<2xi32>
+}
+
+// CHECK-LABEL: bessel_i0e
+func @bessel_i0e(%arg0: tensor<3xf16>, %arg1: tensor<3xf32>, %arg2: tensor<3xf64>) -> (tensor<3xf16>, tensor<3xf32>, tensor<3xf64>) {
+  // CHECK-NOT: tf.BesselI0e
+  %0 = "tf.BesselI0e"(%arg0) : (tensor<3xf16>) -> (tensor<3xf16>)
+  %1 = "tf.BesselI0e"(%arg1) : (tensor<3xf32>) -> (tensor<3xf32>)
+  %2 = "tf.BesselI0e"(%arg2) : (tensor<3xf64>) -> (tensor<3xf64>)
+  return %0, %1, %2 : tensor<3xf16>, tensor<3xf32>, tensor<3xf64>
+}
+
+// CHECK-LABEL: bessel_i1e
+func @bessel_i1e(%arg0: tensor<3xf16>, %arg1: tensor<3xf32>, %arg2: tensor<3xf64>) -> (tensor<3xf16>, tensor<3xf32>, tensor<3xf64>) {
+  // CHECK-NOT: tf.BesselI1e
+  %0 = "tf.BesselI1e"(%arg0) : (tensor<3xf16>) -> (tensor<3xf16>)
+  %1 = "tf.BesselI1e"(%arg1) : (tensor<3xf32>) -> (tensor<3xf32>)
+  %2 = "tf.BesselI1e"(%arg2) : (tensor<3xf64>) -> (tensor<3xf64>)
+  return %0, %1, %2 : tensor<3xf16>, tensor<3xf32>, tensor<3xf64>
+}
+
+// CHECK-LABEL: diag
+func @diag(%arg0: tensor<2xf32>) -> tensor<2x2xf32> {
+  // CHECK-NOT: tf.Diag
+  %0 = "tf.Diag"(%arg0) : (tensor<2xf32>) -> tensor<2x2xf32>
+  return %0 : tensor<2x2xf32>
 }
 
 // TODO(hinsu): Add a test with a valid TF op for which tf2xla kernel is
