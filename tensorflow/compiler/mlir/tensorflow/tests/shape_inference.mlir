@@ -1,70 +1,69 @@
-// RUN: tf-opt %s -tf-shape-inference=propagate-caller-callee-constants=false -verify-diagnostics | FileCheck %s
-// RUN: tf-opt %s -tf-shape-inference=propagate-caller-callee-constants -verify-diagnostics | FileCheck %s
+// RUN: tf-opt %s -tf-shape-inference -verify-diagnostics | FileCheck %s
 
 module attributes {tf.versions = {bad_consumers = [], min_consumer = 0 : i32, producer = 130 : i32}} {
-// CHECK-LABEL: func @main(%arg0: tensor<1xi32>, %arg1: tensor<1xi32>) -> tensor<1xi32>
+  // CHECK-LABEL: func @main(%arg0: tensor<1xi32>, %arg1: tensor<1xi32>) -> tensor<1xi32>
   func @main(%arg0: tensor<1xi32>, %arg1: tensor<1xi32>) -> tensor<*xi32> {
- // CHECK: %[[RESULT:.*]] = "tf.AddV2"
- // CHECK-SAME: (tensor<1xi32>, tensor<1xi32>) -> tensor<1xi32>
- // CHECK: return %[[RESULT]] : tensor<1xi32>
+    // CHECK: %[[RESULT:.*]] = "tf.AddV2"
+    // CHECK-SAME: (tensor<1xi32>, tensor<1xi32>) -> tensor<1xi32>
+    // CHECK: return %[[RESULT]] : tensor<1xi32>
     %0 = "tf.Cast"(%arg0) : (tensor<1xi32>) -> tensor<*xi32>
     %1 = "tf.Cast"(%arg1) : (tensor<1xi32>) -> tensor<*xi32>
     %2 = "tf.AddV2"(%0, %1) : (tensor<*xi32>, tensor<*xi32>) -> tensor<*xi32>
     return %2 : tensor<*xi32>
   }
 
-// CHECK-LABEL: func @simple_chain
+  // CHECK-LABEL: func @simple_chain
   func @simple_chain(%arg0: tensor<1xf32>) -> tensor<*xf32> {
-// CHECK: %[[MUL:.*]] = "tf.Mul"{{.*}} (tensor<1xf32>, tensor<1xf32>) -> tensor<1xf32>
-// CHECK: %[[ADD:.*]] = "tf.Add"(%[[MUL]], %[[MUL]]) : (tensor<1xf32>, tensor<1xf32>) -> tensor<1xf32>
-// CHECK: return %[[ADD]] : tensor<1xf32>
+    // CHECK: %[[MUL:.*]] = "tf.Mul"{{.*}} (tensor<1xf32>, tensor<1xf32>) -> tensor<1xf32>
+    // CHECK: %[[ADD:.*]] = "tf.Add"(%[[MUL]], %[[MUL]]) : (tensor<1xf32>, tensor<1xf32>) -> tensor<1xf32>
+    // CHECK: return %[[ADD]] : tensor<1xf32>
     %0 = "tf.Mul"(%arg0, %arg0) : (tensor<1xf32>, tensor<1xf32>) -> tensor<*xf32>
     %1 = "tf.Add"(%0, %0) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
     return %1 : tensor<*xf32>
   }
 
-// CHECK-LABEL: func @simple_chain_with_broadcast
+  // CHECK-LABEL: func @simple_chain_with_broadcast
   func @simple_chain_with_broadcast(%arg0: tensor<1xf32>, %arg1: tensor<10xf32>) -> tensor<*xf32> {
-// CHECK: %[[MUL:.*]] = "tf.Mul"{{.*}} (tensor<1xf32>, tensor<10xf32>) -> tensor<10xf32>
-// CHECK: %[[ADD:.*]] = "tf.Add"(%[[MUL]], %[[MUL]]) : (tensor<10xf32>, tensor<10xf32>) -> tensor<10xf32>
-// CHECK: %[[CAST:.*]] = "tf.Cast"(%[[ADD]]) {{.*}} : (tensor<10xf32>) -> tensor<*xf32>
-// CHECK: %[[UNKNOWN:.*]] = addf %[[CAST]], %[[CAST]] : tensor<*xf32>
-// CHECK: return %[[UNKNOWN]] : tensor<*xf32>
+    // CHECK: %[[MUL:.*]] = "tf.Mul"{{.*}} (tensor<1xf32>, tensor<10xf32>) -> tensor<10xf32>
+    // CHECK: %[[ADD:.*]] = "tf.Add"(%[[MUL]], %[[MUL]]) : (tensor<10xf32>, tensor<10xf32>) -> tensor<10xf32>
+    // CHECK: %[[CAST:.*]] = "tf.Cast"(%[[ADD]]) {{.*}} : (tensor<10xf32>) -> tensor<*xf32>
+    // CHECK: %[[UNKNOWN:.*]] = addf %[[CAST]], %[[CAST]] : tensor<*xf32>
+    // CHECK: return %[[UNKNOWN]] : tensor<*xf32>
     %0 = "tf.Mul"(%arg0, %arg1) : (tensor<1xf32>, tensor<10xf32>) -> tensor<*xf32>
     %1 = "tf.Add"(%0, %0) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
     %2 = addf %1, %1 : tensor<*xf32>
     return %2 : tensor<*xf32>
   }
 
-// CHECK-LABEL: func @unknown_op
+  // CHECK-LABEL: func @unknown_op
   func @unknown_op(%arg0: tensor<1xf32>) -> tensor<*xf32> {
-// CHECK: %[[MUL:.*]] = "tf.Mul"{{.*}} (tensor<1xf32>, tensor<1xf32>) -> tensor<1xf32>
-// CHECK: %[[UNKNOWN:.*]] = "tf.Unknown"(%[[MUL]], %[[MUL]]) : (tensor<1xf32>, tensor<1xf32>) -> tensor<*xf32>
-// CHECK: return %[[UNKNOWN]] : tensor<*xf32>
+    // CHECK: %[[MUL:.*]] = "tf.Mul"{{.*}} (tensor<1xf32>, tensor<1xf32>) -> tensor<1xf32>
+    // CHECK: %[[UNKNOWN:.*]] = "tf.Unknown"(%[[MUL]], %[[MUL]]) : (tensor<1xf32>, tensor<1xf32>) -> tensor<*xf32>
+    // CHECK: return %[[UNKNOWN]] : tensor<*xf32>
     %0 = "tf.Mul"(%arg0, %arg0) : (tensor<1xf32>, tensor<1xf32>) -> tensor<*xf32>
     %1 = "tf.Unknown"(%0, %0) : (tensor<*xf32>, tensor<*xf32>) -> tensor<*xf32>
     return %1 : tensor<*xf32>
   }
 
-// CHECK-LABEL: func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<?xf32>
-func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
-  br ^bb1
-^bb1:
-// CHECK: %[[IDENTITY:.*]] = "tf.Identity"(%arg0) : (tensor<?xf32>) -> tensor<?xf32>
-// CHECK: return %[[IDENTITY]] : tensor<?xf32>
-  %ret = "tf.Identity"(%arg0) : (tensor<?xf32>) -> tensor<*xf32>
-  return %ret : tensor<*xf32>
-}
+  // CHECK-LABEL: func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<?xf32>
+  func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
+    br ^bb1
+  ^bb1:
+  // CHECK: %[[IDENTITY:.*]] = "tf.Identity"(%arg0) : (tensor<?xf32>) -> tensor<?xf32>
+  // CHECK: return %[[IDENTITY]] : tensor<?xf32>
+    %ret = "tf.Identity"(%arg0) : (tensor<?xf32>) -> tensor<*xf32>
+    return %ret : tensor<*xf32>
+  }
 
 
-// Tests the case where an inference opportunity relies on folding.
+  // Tests the case where an inference opportunity relies on folding.
 
-// CHECK-LABEL: func @simple_folding
+  // CHECK-LABEL: func @simple_folding
   func @simple_folding(%arg0: tensor<1x1x1x1xi32>, %arg1: tensor<1x1x1x1xf32>) -> tensor<?x?x?x?xf32> {
-// CHECK: %[[SHAPE:.*]] = "tf.Shape"
-// CHECK: %[[CONV:.*]] = "tf.Conv2DBackpropInput"(%[[SHAPE]]
-// CHECK-SAME: (tensor<4xi32>, tensor<1x1x1x1xf32>, tensor<1x1x1x1xf32>) -> tensor<1x1x1x1xf32>
-// CHECK: return %[[CONV]] : tensor<1x1x1x1xf32>
+    // CHECK: %[[SHAPE:.*]] = "tf.Shape"
+    // CHECK: %[[CONV:.*]] = "tf.Conv2DBackpropInput"(%[[SHAPE]]
+    // CHECK-SAME: (tensor<4xi32>, tensor<1x1x1x1xf32>, tensor<1x1x1x1xf32>) -> tensor<1x1x1x1xf32>
+    // CHECK: return %[[CONV]] : tensor<1x1x1x1xf32>
     %0 = "tf.Shape"(%arg0) : (tensor<1x1x1x1xi32>) -> tensor<4xi32>
     %1 = "tf.Conv2DBackpropInput"(%0, %arg1, %arg1) {
       padding = "VALID", strides = [1, 1, 1, 1]
@@ -72,7 +71,7 @@ func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
     return %1 : tensor<?x?x?x?xf32>
   }
 
-// Tests where tf.Const's value needs to be refined.
+  // Tests where tf.Const's value needs to be refined.
 
   func @const_refine() -> tensor<*xi32> {
     %0 = "tf.Const"() {value = dense<[3, 2]> : tensor<2xi32>} : () -> tensor<*xi32>
@@ -81,17 +80,17 @@ func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
     return %0 : tensor<*xi32>
   }
 
-// Tests the case where an op's shape function returns non-fully-defined shapes.
+  // Tests the case where an op's shape function returns non-fully-defined shapes.
 
-// CHECK-LABEL: func @op_non_fully_defined_shape_fn
-  func @op_non_fully_defined_shape_fn(%arg0: tensor<0xi32>, %arg1: tensor<0xi32>) -> tensor<?xi32> {
+  // CHECK-LABEL: func @op_non_fully_defined_shape_fn
+  func @op_non_fully_defined_shape_fn(%arg0: tensor<*xi32>, %arg1: tensor<0xi32>) -> tensor<?xi32> {
     // CHECK: tf.BroadcastGradientArgs
-    // CHECK-SAME: (tensor<0xi32>, tensor<0xi32>) -> (tensor<?xi32>, tensor<?xi32>)
-    %2:2 = "tf.BroadcastGradientArgs"(%arg0, %arg1) {T = "tfdtype$DT_INT32", name = "BroadcastGradientArgs"} : (tensor<0xi32>, tensor<0xi32>) -> (tensor<?xi32>, tensor<?xi32>)
+    // CHECK-SAME: (tensor<*xi32>, tensor<0xi32>) -> (tensor<?xi32>, tensor<?xi32>)
+    %2:2 = "tf.BroadcastGradientArgs"(%arg0, %arg1) {T = "tfdtype$DT_INT32", name = "BroadcastGradientArgs"} : (tensor<*xi32>, tensor<0xi32>) -> (tensor<?xi32>, tensor<?xi32>)
     return %2#0 : tensor<?xi32>
   }
 
-// CHECK-LABEL: func @shape_from_const_input
+  // CHECK-LABEL: func @shape_from_const_input
   func @shape_from_const_input(%arg0: tensor<3x3x32x64xf32>, %arg1: tensor<200x24x24x64xf32>) -> tensor<?x?x?x?xf32> {
     %0 = "tf.Const"() {value = dense<[200, 26, 26, 32]> : tensor<4xi32>} : () -> tensor<4xi32>
     // CHECK: tf.Conv2DBackpropInput
@@ -440,6 +439,22 @@ func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
     return %arg0 : tensor<2xi32>
   }
 
+  // Test iteratively updating call site if a std.call is used.
+  // CHECK-LABEL: func @call_partitioned_call2(
+  // CHECK-SAME: -> tensor<1xi32>
+  func @call_partitioned_call2() -> tensor<*xi32> {
+    // CHECK: () -> tensor<1xi32>
+    %0 = call @partitioned_called_func2() : () -> tensor<*xi32>
+    return %0 : tensor<*xi32>
+  }
+  // CHECK-LABEL: func @partitioned_called_func2(
+  // CHECK-SAME: -> tensor<1xi32>
+  func @partitioned_called_func2() -> (tensor<*xi32>) {
+    %0 = "tf.Const"() {value = dense<-1> : tensor<1xi32>} : () -> tensor<1xi32>
+    %1 = tensor_cast %0 : tensor<1xi32> to tensor<*xi32>
+    return %1 : tensor<*xi32>
+  }
+
   // CHECK-LABEL: func @tensor_list_refine
   func @tensor_list_refine() {
     tf_executor.graph {
@@ -501,16 +516,16 @@ func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
   // CHECK-LABEL: cast_at_end(%arg0:
   // CHECK-SAME: tensor<16x194x199x4xui8>, tensor<16x194x199x4xi8>, tensor<*xi8>
   func @cast_at_end(%arg0: tensor<16x194x199x4xf32>, %arg1: tensor<16x194x199x4xi8>) -> (tensor<*xui8>, tensor<*xi8>, tensor<*xi8>) {
-    // CHECK: %[[CAST_RESULT_0:.*]] = "tf.Cast"(%arg0)
-    // CHECK-SAME: (tensor<16x194x199x4xf32>) -> tensor<16x194x199x4xui8>
     %27 = "tf.Cast"(%arg0) {Truncate = false, device = ""} : (tensor<16x194x199x4xf32>) -> tensor<*xui8>
-    // CHECK: %[[CAST_RESULT_1:.*]] = "tf.Cast"(%arg0)
-    // CHECK-SAME: (tensor<16x194x199x4xf32>) -> tensor<16x194x199x4xi8>
-    // CHECK: %[[CAST_RESULT_2:.*]] = "tf.Cast"(%[[CAST_RESULT_1]])
-    // CHECK-SAME: (tensor<16x194x199x4xi8>) -> tensor<*xi8>
     %28 = "tf.Cast"(%arg0) {Truncate = false, device = ""} : (tensor<16x194x199x4xf32>) -> tensor<*xi8>
+    // CHECK: %[[CAST_RESULT_2:.*]] = "tf.Cast"(%arg0)
+    // CHECK-SAME: (tensor<16x194x199x4xf32>) -> tensor<*xi8>
     // CHECK: %[[ADDI:.*]] = addi %[[CAST_RESULT_2]], %[[CAST_RESULT_2]]
     %2 = addi %28, %28 : tensor<*xi8>
+    // CHECK: %[[CAST_RESULT_0:.*]] = "tf.Cast"(%arg0)
+    // CHECK-SAME: (tensor<16x194x199x4xf32>) -> tensor<16x194x199x4xui8>
+    // CHECK: %[[CAST_RESULT_1:.*]] = "tf.Cast"(%arg0)
+    // CHECK-SAME: (tensor<16x194x199x4xf32>) -> tensor<16x194x199x4xi8>
     // CHECK: return %[[CAST_RESULT_0]], %[[CAST_RESULT_1]], %[[ADDI]]
     return %27, %28, %2 : tensor<*xui8>, tensor<*xi8>, tensor<*xi8>
   }
@@ -523,6 +538,21 @@ func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
       tf_device.return %2 : tensor<1x8x2xf32>
     // CHECK: () -> tensor<1x8x2xf32>
     }) {device = "/device:CPU:0"} : () -> tensor<*xf32>
+    // CHECK: "tf.Cast"(%{{.*}}) {Truncate = false} : (tensor<1x8x2xf32>) -> tensor<*xf32>
+    // CHECK: (tensor<i32>, tensor<1x8x2xf32>) -> (tensor<1x8x1xf32>, tensor<1x8x1xf32>)
+    %3:2 = "tf.Split"(%0, %1) {device = ""} : (tensor<i32>, tensor<*xf32>) -> (tensor<*xf32>, tensor<*xf32>)
+    %4 = addf %1, %1 : tensor<*xf32>
+    return %3#0, %3#1 : tensor<*xf32>, tensor<*xf32>
+  }
+
+  // CHECK-LABEL: infer_device_cluster
+  func @infer_device_cluster(%arg0: tensor<1x8x2xi32>) -> (tensor<*xf32>, tensor<*xf32>) {
+    %0 = "tf.Const"() {value = dense<-1> : tensor<i32>} : () -> tensor<i32>
+    %1 = "tf_device.cluster"() ({
+      %2 = "tf.Cast"(%arg0) {Truncate = false} : (tensor<1x8x2xi32>) -> tensor<1x8x2xf32>
+      tf_device.return %2 : tensor<1x8x2xf32>
+    // CHECK: () -> tensor<1x8x2xf32>
+    }) : () -> tensor<*xf32>
     // CHECK: "tf.Cast"(%{{.*}}) {Truncate = false} : (tensor<1x8x2xf32>) -> tensor<*xf32>
     // CHECK: (tensor<i32>, tensor<1x8x2xf32>) -> (tensor<1x8x1xf32>, tensor<1x8x1xf32>)
     %3:2 = "tf.Split"(%0, %1) {device = ""} : (tensor<i32>, tensor<*xf32>) -> (tensor<*xf32>, tensor<*xf32>)
@@ -559,5 +589,37 @@ func @multiple_blocks_one_return(%arg0: tensor<?xf32>) -> tensor<*xf32> {
   }
   func @pcall_resource_result_func(%arg0: tensor<*x!tf.resource<tensor<f32>>>) -> tensor<*x!tf.resource<tensor<f32>>> {
     return %arg0 : tensor<*x!tf.resource<tensor<f32>>>
+  }
+
+  // Check that the fold for tf.Size does not crash with unranked output type.
+  // CHECK-LABEL: func @unranked_tf_size
+  func @unranked_tf_size() -> tensor<*xi32> {
+    %0 = "tf.Const"() {value = dense<[-1, 26]> : tensor<2xi32>} : () -> tensor<2xi32>
+    %add = "tf.AddV2"(%0, %0) : (tensor<2xi32>, tensor<2xi32>) -> tensor<*xi32>
+    // CHECK: "tf.Size"
+    // CHECK-SAME: (tensor<2xi32>) -> tensor<i32>
+    %size = "tf.Size"(%add) {device = ""} : (tensor<*xi32>) -> tensor<*xi32>
+    return %size : tensor<*xi32>
+  }
+
+  // Test no tf.Cast ops are inserted when refining tf_executor.graph results.
+  // CHECK-LABEL: func @call_in_graph({{%.+}}: tensor<i32>) -> tensor<i32>
+  func @call_in_graph(%arg0: tensor<i32>) -> tensor<*xi32> {
+    // CHECK-NOT: tf.Cast
+    %0 = tf_executor.graph {
+      %1:2 = tf_executor.island wraps "tf.PartitionedCall"(%arg0) {config = "", config_proto = "", executor_type = "", f = @call_in_graph_func} : (tensor<i32>) -> tensor<*xi32>
+      tf_executor.fetch %1#0 : tensor<*xi32>
+    }
+    return %0 : tensor<*xi32>
+  }
+
+  // CHECK-LABEL: func @call_in_graph_func({{%.+}}: tensor<i32>) -> tensor<i32>
+  func @call_in_graph_func(%arg0: tensor<*xi32>) -> tensor<*xi32> {
+    // CHECK-NOT: tf.Cast
+    %0 = tf_executor.graph {
+      %1:2 = tf_executor.island wraps "tf.Identity"(%arg0) : (tensor<*xi32>) -> tensor<*xi32>
+      tf_executor.fetch %1#0 : tensor<*xi32>
+    }
+    return %0 : tensor<*xi32>
   }
 }

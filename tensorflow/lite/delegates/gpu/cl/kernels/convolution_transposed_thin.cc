@@ -21,7 +21,6 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/kernels/util.h"
 #include "tensorflow/lite/delegates/gpu/cl/kernels/work_group_picking.h"
-#include "tensorflow/lite/delegates/gpu/cl/precision.h"
 
 namespace tflite {
 namespace gpu {
@@ -29,13 +28,13 @@ namespace cl {
 
 ConvolutionTransposedThin::ConvolutionTransposedThin(
     const OperationDef& definition, const ConvolutionTransposedAttributes& attr,
-    const DeviceInfo& device_info)
+    const GpuInfo& gpu_info)
     : GPUOperation(definition) {
   code_ = GenerateConvolutionTransposedCode(
       definition_, DivideRoundUp(attr.weights.shape.i, 4), attr.weights.shape.o,
       int2(attr.weights.shape.w, attr.weights.shape.h));
   if (definition_.precision == CalculationsPrecision::F16 &&
-      device_info.IsAdreno3xx()) {
+      gpu_info.IsAdreno() && gpu_info.adreno_info.IsAdreno3xx()) {
     compiler_options_.push_back(CompilerOptions::ADRENO_FULL_SIMD_LINE);
   }
 }
@@ -159,26 +158,19 @@ int3 ConvolutionTransposedThin::GetGridSize() const {
 }
 
 bool IsConvolutionTransposedThinSupported(
-    const CLDevice& device, const ConvolutionTransposedAttributes& attr) {
+    const ConvolutionTransposedAttributes& attr) {
   return attr.weights.shape.o <= 4 && attr.weights.shape.w == attr.stride.w &&
          attr.weights.shape.h == attr.stride.h &&
          attr.padding.prepended.w == 0 && attr.padding.prepended.h == 0 &&
          attr.padding.appended.w == 0 && attr.padding.appended.h == 0;
 }
 
-absl::Status CreateConvolutionTransposedThin(
-    const CreationContext& creation_context, const OperationDef& definition,
-    const ConvolutionTransposedAttributes& attr,
-    ConvolutionTransposedThin* result) {
-  if (!IsConvolutionTransposedThinSupported(*creation_context.device, attr)) {
-    return absl::InvalidArgumentError(
-        "ConvolutionTransposedThin doesn't support this attributes");
-  }
-  *result = ConvolutionTransposedThin(definition, attr,
-                                      creation_context.device->info_);
-  RETURN_IF_ERROR(
-      result->UploadData(attr.weights, attr.bias, creation_context.context));
-  return absl::OkStatus();
+ConvolutionTransposedThin CreateConvolutionTransposedThin(
+    const GpuInfo& gpu_info, const OperationDef& definition,
+    const ConvolutionTransposedAttributes& attr) {
+  ConvolutionTransposedThin result(definition, attr, gpu_info);
+  result.UploadData(attr.weights, attr.bias);
+  return result;
 }
 
 }  // namespace cl

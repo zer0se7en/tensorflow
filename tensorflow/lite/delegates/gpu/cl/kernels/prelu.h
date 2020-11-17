@@ -31,9 +31,9 @@ namespace tflite {
 namespace gpu {
 namespace cl {
 
-absl::Status CreatePReLU(const CreationContext& creation_context,
+GPUOperation CreatePReLU(const GpuInfo& gpu_info,
                          const OperationDef& definition,
-                         const PReLUAttributes& attr, GPUOperation* result);
+                         const PReLUAttributes& attr);
 
 }  // namespace cl
 }  // namespace gpu

@@ -352,7 +352,7 @@ class DeviceKernelOpTest : public OpsTestBase {
     EXPECT_EQ(TF_OK, TF_GetCode(status));
     TF_DeleteStatus(status);
 
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
     std::unique_ptr<Device> device(
         DeviceFactory::NewDevice(device_name_, {}, "/job:a/replica:0/task:0"));
     OpsTestBase::SetDevice(DEVICE_GPU, std::move(device));
@@ -361,7 +361,7 @@ class DeviceKernelOpTest : public OpsTestBase {
     TF_ASSERT_OK(InitOp());
   }
 
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
   const char* device_name_ = tensorflow::DEVICE_GPU;
 #else
   const char* device_name_ = tensorflow::DEVICE_CPU;
@@ -468,7 +468,7 @@ TEST_F(DeviceKernelOpTest, TestAllocateTempSizeOne) {
     int64_t dim = 1;
     TF_AllocatorAttributes alloc_attrs;
     alloc_attrs.struct_size = TF_ALLOCATOR_ATTRIBUTES_STRUCT_SIZE;
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
     alloc_attrs.on_host = 0;
 #else
     alloc_attrs.on_host = 1;
@@ -505,7 +505,7 @@ TEST_F(DeviceKernelOpTest, TestAllocateTempEmpty) {
     int64_t dim = 0;
     TF_AllocatorAttributes alloc_attrs;
     alloc_attrs.struct_size = TF_ALLOCATOR_ATTRIBUTES_STRUCT_SIZE;
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
     alloc_attrs.on_host = 0;
 #else
     alloc_attrs.on_host = 1;
@@ -538,7 +538,7 @@ TEST_F(DeviceKernelOpTest, TestAllocateTempSize2x3) {
     int64_t dim[2] = {2, 3};
     TF_AllocatorAttributes alloc_attrs;
     alloc_attrs.struct_size = TF_ALLOCATOR_ATTRIBUTES_STRUCT_SIZE;
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
     alloc_attrs.on_host = 0;
 #else
     alloc_attrs.on_host = 1;
@@ -565,6 +565,74 @@ TEST_F(DeviceKernelOpTest, TestAllocateTempSize2x3) {
             output->DebugString(100));
 }
 
+TEST_F(DeviceKernelOpTest, TestForwardInputOrAllocateOutput) {
+  const char* node_name = "TestForwardInputOrAllocateOutputKernel";
+  const char* op_name = "BazOp";
+  const char* device_name = "FakeDeviceName";
+
+  REGISTER_OP(op_name)
+      .Input("input1: float")
+      .Input("input2: float")
+      .Output("output1: float")
+      .Attr("SomeDataTypeAttr: type");
+
+  // A kernel whose Compute function that forwards a scalar input to output
+  auto my_compute_func = [](void* kernel, TF_OpKernelContext* ctx) {
+    TF_Status* s = TF_NewStatus();
+    int candidate_input_indices[1] = {0};
+    int forwarded_input;
+    int64_t output_dims[1] = {};
+    TF_Tensor* output = TF_ForwardInputOrAllocateOutput(
+        /*context=*/ctx, candidate_input_indices,
+        /*num_candidate_input_indices=*/1,
+        /*output_index=*/0, output_dims, /*output_num_dims=*/0,
+        &forwarded_input, /*status=*/s);
+    EXPECT_EQ(TF_OK, TF_GetCode(s));
+    EXPECT_EQ(forwarded_input, 0);
+    EXPECT_EQ(TF_FLOAT, TF_TensorType(output));
+    EXPECT_EQ(0, TF_NumDims(output));
+    TF_DeleteStatus(s);
+    TF_DeleteTensor(output);
+  };
+
+  TF_KernelBuilder* builder = TF_NewKernelBuilder(op_name, device_name, nullptr,
+                                                  my_compute_func, nullptr);
+
+  {
+    TF_Status* status = TF_NewStatus();
+    TF_RegisterKernelBuilder(node_name, builder, status);
+    EXPECT_EQ(TF_OK, TF_GetCode(status));
+    TF_DeleteStatus(status);
+  }
+
+  {
+    OpKernelContext::Params p;
+    DummyDevice dummy_device(nullptr);
+    p.device = &dummy_device;
+    AllocatorAttributes alloc_attrs;
+    p.output_attr_array = &alloc_attrs;
+
+    Tensor t(123.0f);
+
+    gtl::InlinedVector<TensorValue, 4> inputs;
+    // GetFakeKernel requires a NodeDef with two inputs
+    inputs.emplace_back(&t);
+    inputs.emplace_back();
+    p.inputs = &inputs;
+
+    Status status;
+    std::unique_ptr<OpKernel> kernel =
+        GetFakeKernel(device_name, op_name, node_name, &status);
+    TF_EXPECT_OK(status);
+    ASSERT_NE(nullptr, kernel.get());
+
+    p.op_kernel = kernel.get();
+    OpKernelContext ctx(&p);
+    kernel->Compute(&ctx);
+    ASSERT_EQ(123, ctx.mutable_output(0)->scalar<float>()());
+  }
+}
+
 void validate_tensor(TF_Tensor* tensor, int64_t* dims, int64_t num_dims,
                      TF_DataType dtype) {
   EXPECT_EQ(TF_FLOAT, TF_TensorType(tensor));
@@ -578,7 +646,7 @@ template <typename T>
 void set_tensor_data(TF_Tensor* tensor, T* values, size_t tensor_size_bytes,
                      TF_OpKernelContext* ctx) {
   T* data = reinterpret_cast<T*>(TF_TensorData(tensor));
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
   OpKernelContext* cc_ctx = reinterpret_cast<OpKernelContext*>(ctx);
   cc_ctx->eigen_gpu_device().memcpyHostToDevice(data, values,
                                                 tensor_size_bytes);

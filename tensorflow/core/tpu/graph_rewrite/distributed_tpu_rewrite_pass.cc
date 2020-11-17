@@ -64,9 +64,9 @@ limitations under the License.
 #include "tensorflow/core/tpu/graph_rewrite/distributed_tpu_rewrite_pass_internal.h"
 #include "tensorflow/core/tpu/graph_rewrite/host_training_loop_optimization_util.h"
 #include "tensorflow/core/tpu/graph_rewrite/incomplete_nodedef_builder.h"
-#include "tensorflow/core/tpu/kernels/tpu_util_c_api.h"
 #include "tensorflow/core/tpu/tpu_compile_interface.h"
 #include "tensorflow/core/tpu/tpu_defs.h"
+#include "tensorflow/core/tpu/tpu_ops_c_api.h"
 #include "tensorflow/core/util/device_name_utils.h"
 #include "tensorflow/core/util/dump_graph.h"
 #include "tensorflow/stream_executor/tpu/tpu_platform_interface.h"
@@ -961,7 +961,7 @@ bool IsTpuDevice(const string& device_string) {
 const absl::flat_hash_set<std::string>& PlaceOnTPUOpList() {
   static const auto place_on_tpu_ops = new absl::flat_hash_set<std::string>(
       {"Identity", "IdentityN", "Enter", "Exit", "Switch", "Merge",
-       "NextIteration", "Shape"});
+       "NextIteration", "Shape", "_Retval"});
   return *place_on_tpu_ops;
 }
 
@@ -1568,7 +1568,8 @@ Status DistributedTPURewritePass::GetArgAndRetvalShapes(
     arg_shape.shape = TensorShape();  // Variables are always scalars.
     arg_shape.handle_shape = info->handle_shape;
     arg_shape.handle_type = info->handle_type;
-    TF_RET_CHECK(arg_shape.handle_type != DT_INVALID);
+    TF_RET_CHECK(arg_shape.handle_type != DT_INVALID)
+        << " input edge: " << input_edges[edge_pos]->DebugString();
     ++edge_pos;
   }
 

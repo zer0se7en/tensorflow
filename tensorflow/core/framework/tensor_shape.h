@@ -263,7 +263,7 @@ class TensorShapeBase : public TensorShapeRep {
   explicit TensorShapeBase(DataType dt);
 
  private:
-  void RecomputeNumElements();
+  Status RecomputeNumElements();
   void InitDims(gtl::ArraySlice<int64> dim_sizes);
 
   // True for PartialTensorShape, false for TensorShape
@@ -331,6 +331,11 @@ class TensorShape : public TensorShapeBase<TensorShape> {
   // For access to TensorShapeBase(DataType).
   friend class Tensor;
 };
+
+/// Outputs `TensorShapeBase` to `std::ostream`.
+inline std::ostream& operator<<(std::ostream& os, const TensorShape& ts) {
+  return os << ts.DebugString();
+}
 
 /// Represents the value of one dimension in a TensorShape.
 struct TensorShapeDim {

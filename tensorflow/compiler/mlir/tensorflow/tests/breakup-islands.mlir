@@ -4,8 +4,8 @@
 // All tests also test for idempotence.
 
 // Test that external functions aren't processed (used to crash).
-// CHECK-LABEL: func @unused_external_func
-func @unused_external_func()
+// CHECK-LABEL: func private @unused_external_func
+func private @unused_external_func()
 
 func @multiple_return(%arg0: tensor<*xi32>, %arg1: tensor<i32>) -> (tensor<*xi32>, tensor<*xi32>) {
   %graph:2 = tf_executor.graph {
@@ -285,7 +285,7 @@ func @empty_island_multiple_data_results(%arg0: tensor<*xf32>, %arg1: tensor<*xi
 // and certain tf_executor ops are added correctly.
 
 // CHECK: %[[CONTROL:[^ ,]*]] = tf_executor.island wraps "tf.Print"
-// CHECK: tf_executor.NextIteration.Sink [{{.*}}] {{.*}}, %[[CONTROL]]
+// CHECK: tf_executor.NextIteration.Sink[{{.*}}] {{.*}}, %[[CONTROL]]
 func @next_iteration_sink_control_input() {
   tf_executor.graph {
     %source:3 = tf_executor.NextIteration.Source : tensor<*xi32>

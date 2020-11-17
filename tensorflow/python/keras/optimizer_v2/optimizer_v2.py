@@ -25,11 +25,14 @@ import functools
 
 import six
 
+from tensorflow.python.distribute import central_storage_strategy
 from tensorflow.python.distribute import distribution_strategy_context as distribute_ctx
 from tensorflow.python.distribute import parameter_server_strategy
+from tensorflow.python.distribute import parameter_server_strategy_v2
 from tensorflow.python.distribute import values as ds_values
 from tensorflow.python.eager import backprop
 from tensorflow.python.eager import context
+from tensorflow.python.eager import monitoring
 from tensorflow.python.framework import dtypes
 from tensorflow.python.framework import ops
 from tensorflow.python.framework import tensor_util
@@ -40,6 +43,7 @@ from tensorflow.python.keras.optimizer_v2 import learning_rate_schedule
 from tensorflow.python.keras.optimizer_v2 import utils as optimizer_utils
 from tensorflow.python.keras.utils import generic_utils
 from tensorflow.python.keras.utils import layer_utils
+from tensorflow.python.keras.utils import tf_inspect
 from tensorflow.python.keras.utils import tf_utils
 from tensorflow.python.ops import array_ops
 from tensorflow.python.ops import control_flow_ops
@@ -50,9 +54,11 @@ from tensorflow.python.ops import variables as tf_variables
 from tensorflow.python.saved_model import revived_types
 from tensorflow.python.training.tracking import base as trackable
 from tensorflow.python.util import nest
-from tensorflow.python.util import tf_inspect
 from tensorflow.python.util.tf_export import keras_export
 
+
+keras_optimizers_gauge = monitoring.BoolGauge(
+    "/tensorflow/api/keras/optimizers", "keras optimizer usage", "method")
 
 _DEFAULT_VALID_DTYPES = frozenset([
     dtypes.float16, dtypes.bfloat16, dtypes.float32, dtypes.float64,
@@ -78,6 +84,36 @@ def _deduplicate_indexed_slices(values, indices):
       values, new_index_positions,
       array_ops.shape(unique_indices)[0])
   return (summed_values, unique_indices)
+
+
+class NullContextmanager(object):
+
+  def __init__(self, *args, **kwargs):
+    pass
+
+  def __enter__(self):
+    pass
+
+  def __exit__(self, type_arg, value_arg, traceback_arg):
+    return False  # False values do not suppress exceptions
+
+
+def name_scope_only_in_function_or_graph(name):
+  """Internal-only entry point for `name_scope*`.
+
+  Enters a compat.v1.name_scope only when in a function or graph,
+  not when running fully eagerly.
+
+  Args:
+    name: The name argument that is passed to the op function.
+
+  Returns:
+    `name_scope*` context manager.
+  """
+  if not context.executing_eagerly():
+    return ops.name_scope_v1(name)
+  else:
+    return NullContextmanager()
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -304,26 +340,32 @@ class OptimizerV2(trackable.Trackable):
     ```
 
     Args:
-      name: A non-empty string.  The name to use for accumulators created
-        for the optimizer.
+      name: String. The name to use for momentum accumulator weights created
+        by the optimizer.
       gradient_aggregator: The function to use to aggregate gradients across
         devices (when using `tf.distribute.Strategy`). If `None`, defaults to
         summing the gradients across devices. The function should accept and
         return a list of `(gradient, variable)` tuples.
-      gradient_transformers: (Optional). List of functions to use to transform
-        gradients before applying updates to `Variable`s. The functions are
+      gradient_transformers: Optional. List of functions to use to transform
+        gradients before applying updates to Variables. The functions are
         applied after `gradient_aggregator`. The functions should accept and
         return a list of `(gradient, variable)` tuples.
-      **kwargs: keyword arguments. Allowed to be {`clipnorm`, `clipvalue`, `lr`,
-        `decay`}. `clipnorm` is clip gradients by norm; `clipvalue` is clip
-        gradients by value, `decay` is included for backward compatibility to
-        allow time inverse decay of learning rate. `lr` is included for backward
-        compatibility, recommended to use `learning_rate` instead.
+      **kwargs: keyword arguments. Allowed arguments are `clipvalue`,
+        `clipnorm`, `global_clipnorm`.
+        If `clipvalue` (float) is set, the gradient of each weight
+        is clipped to be no higher than this value.
+        If `clipnorm` (float) is set, the gradient of each weight
+        is individually clipped so that its norm is no higher than this value.
+        If `global_clipnorm` (float) is set the gradient of all weights is
+        clipped so that their global norm is no higher than this value.
 
     Raises:
-      ValueError: If name is malformed.
+      ValueError: in case of any invalid argument.
     """
-    allowed_kwargs = {"clipnorm", "clipvalue", "lr", "decay"}
+    # Instrument optimizer usages
+    keras_optimizers_gauge.get_cell(self.__class__.__name__).set(True)
+
+    allowed_kwargs = {"clipnorm", "clipvalue", "lr", "decay", "global_clipnorm"}
     for k in kwargs:
       if k not in allowed_kwargs:
         raise TypeError("Unexpected keyword argument "
@@ -370,12 +412,22 @@ class OptimizerV2(trackable.Trackable):
       gradient_transformers = []
     self.gradient_transformers = gradient_transformers
     self.clipnorm = kwargs.pop("clipnorm", None)
+    self.global_clipnorm = kwargs.pop("global_clipnorm", None)
+    if self.clipnorm is not None and self.global_clipnorm is not None:
+      raise ValueError("Cannot accept both `clipnorm` and `global_clipnorm`, "
+                       "passed `clipnorm` {}, `global_clipnorm` {}".format(
+                           self.clipnorm, self.global_clipnorm))
     self.clipvalue = kwargs.pop("clipvalue", None)
 
   @property
   def clipnorm(self):
     """`float` or `None`. If set, clips gradients to a maximum norm."""
     return self._clipnorm
+
+  @property
+  def global_clipnorm(self):
+    """`float` or `None`. If set, clips gradients to a maximum norm."""
+    return self._global_clipnorm
 
   @clipnorm.setter
   def clipnorm(self, val):
@@ -386,6 +438,16 @@ class OptimizerV2(trackable.Trackable):
     self._clipnorm = val
     self._clipnorm_fn = optimizer_utils.make_gradient_clipnorm_fn(
         self._clipnorm)
+
+  @global_clipnorm.setter
+  def global_clipnorm(self, val):
+    if val is not None and self.gradient_transformers:
+      raise ValueError("`clipnorm` cannot be set when `gradient_transformers` "
+                       "is set. Instead, use the `gradient_transformers` to "
+                       "specify clipping and other transformations.")
+    self._global_clipnorm = val
+    self._global_clipnorm_fn = optimizer_utils.make_global_gradient_clipnorm_fn(
+        self._global_clipnorm)
 
   @property
   def clipvalue(self):
@@ -425,6 +487,8 @@ class OptimizerV2(trackable.Trackable):
       grads_and_vars = self._clipvalue_fn(grads_and_vars)
     if self._clipnorm is not None:
       grads_and_vars = self._clipnorm_fn(grads_and_vars)
+    if self._global_clipnorm is not None:
+      grads_and_vars = self._global_clipnorm_fn(grads_and_vars)
 
     for fn in self.gradient_transformers:
       grads_and_vars = fn(grads_and_vars)
@@ -583,9 +647,12 @@ class OptimizerV2(trackable.Trackable):
             "context.")
 
       strategy = distribute_ctx.get_strategy()
-      if (not experimental_aggregate_gradients and strategy and isinstance(
-          strategy.extended,
-          parameter_server_strategy.ParameterServerStrategyExtended)):
+      if (not experimental_aggregate_gradients and strategy and
+          isinstance(strategy,
+                     (parameter_server_strategy.ParameterServerStrategyV1,
+                      parameter_server_strategy_v2.ParameterServerStrategyV2,
+                      central_storage_strategy.CentralStorageStrategy,
+                      central_storage_strategy.CentralStorageStrategyV1))):
         raise NotImplementedError(
             "`experimental_aggregate_gradients=False is not supported for "
             "ParameterServerStrategy and CentralStorageStrategy")
@@ -632,7 +699,7 @@ class OptimizerV2(trackable.Trackable):
 
     eagerly_outside_functions = ops.executing_eagerly_outside_functions()
     update_ops = []
-    with ops.name_scope(name or self._name, skip_on_eager=True):
+    with name_scope_only_in_function_or_graph(name or self._name):
       for grad, var in grads_and_vars:
         # TODO(crccw): It's not allowed to assign PerReplica value to
         # MirroredVariable.  Remove this after we relax this restriction.
@@ -645,8 +712,9 @@ class OptimizerV2(trackable.Trackable):
         # Colocate the update with variables to avoid unnecessary communication
         # delays. See b/136304694.
         with distribution.extended.colocate_vars_with(var):
-          with ops.name_scope("update" if eagerly_outside_functions else
-                              "update_" + var.op.name, skip_on_eager=True):
+          with name_scope_only_in_function_or_graph(
+              "update" if eagerly_outside_functions else "update_" +
+              var.op.name):
             update_ops.extend(distribution.extended.update(
                 var, apply_grad_to_update_var, args=(grad,), group=False))
 
@@ -656,7 +724,7 @@ class OptimizerV2(trackable.Trackable):
         # If the current context is graph mode or any of the update ops are
         # symbolic then the step update should be carried out under a graph
         # context. (eager updates execute immediately)
-        with ops._get_graph_from_inputs(update_ops).as_default():  # pylint: disable=protected-access
+        with backend._current_graph(update_ops).as_default():  # pylint: disable=protected-access
           with ops.control_dependencies([control_flow_ops.group(update_ops)]):
             return self._iterations.assign_add(1, read_value=False)
 
@@ -764,6 +832,14 @@ class OptimizerV2(trackable.Trackable):
       if name in self._hyper:
         return self._get_hyper(name)
       raise e
+
+  def __dir__(self):
+    result = set(super(OptimizerV2, self).__dir__())
+    if "_hyper" in result:
+      result |= self._hyper.keys()
+      if "learning_rate" in self._hyper.keys():
+        result.add("lr")
+    return list(result)
 
   def __setattr__(self, name, value):
     """Override setattr to support dynamic hyperparameter setting."""
@@ -924,6 +1000,8 @@ class OptimizerV2(trackable.Trackable):
       config["clipnorm"] = self.clipnorm
     if self.clipvalue is not None:
       config["clipvalue"] = self.clipvalue
+    if self.global_clipnorm is not None:
+      config["global_clipnorm"] = self.global_clipnorm
     return config
 
   @classmethod
@@ -1267,7 +1345,7 @@ class OptimizerV2(trackable.Trackable):
         # (aside from double initialization), and makes variable creator scopes
         # behave the same way they do when graph building.
         and not ops.get_default_graph()._variable_creator_stack):  # pylint: disable=protected-access
-      initializer = trackable.CheckpointInitialValue(
+      initializer = trackable.CheckpointInitialValueCallable(
           checkpoint_position=slot_variable_position)
       slot_variable = self.add_slot(
           var=variable,
@@ -1320,7 +1398,7 @@ def _var_key(var):
   # pylint: disable=protected-access
   # Get the distributed variable if it exists.
   if hasattr(var, "_distributed_container"):
-    var = var._distributed_container
+    var = var._distributed_container()
   if var._in_graph_mode:
     return var._shared_name
   return var._unique_id

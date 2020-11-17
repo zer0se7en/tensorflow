@@ -1659,7 +1659,8 @@ inline void ComputeInterpolationValues(const int32 value, const int32 scale_10,
     *scaled_value = value * scale_10;
   }
   *lower_bound = std::max(*scaled_value / (1 << 10), 0);
-  *upper_bound = std::min(*scaled_value / (1 << 10) + 1, input_size - 1);
+  *upper_bound =
+      std::min((*scaled_value + (1 << 10) - 1) / (1 << 10), input_size - 1);
 }
 
 // Same as above but takes int8 as input and output.
@@ -1743,8 +1744,9 @@ inline void ResizeBilinear(const tflite::ResizeBilinearParams& op_params,
               (input_y - (1 << 10) * y0) * (input_x - (1 << 10) * x0);
           const int64_t output_20 =
               output_20_ll + output_20_lu + output_20_rl + output_20_ru;
+          const int64_t round = (output_20 > 0) ? (1 << 19) : -(1 << 19);
           const int8_t interpolation =
-              static_cast<int8_t>((output_20 + (1 << 19)) / (1 << 20));
+              static_cast<int8_t>((output_20 + round) / (1 << 20));
           output_data[Offset(output_shape, b, y, x, c)] = interpolation;
         }
       }
@@ -2384,6 +2386,10 @@ template <typename D, typename T>
 void SelectTrueCoords(const RuntimeShape& input_condition_shape,
                       const D* input_condition_data, T* output_data) {
   const size_t size = input_condition_shape.FlatSize();
+  if (size == 0) {
+    // Dimension is zero, in which case we don't need to output.
+    return;
+  }
   const size_t cond_rank = input_condition_shape.DimensionsCount();
 
   std::vector<int> dims_to_count(cond_rank, 0);
