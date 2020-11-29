@@ -3303,14 +3303,14 @@ def TFL_ResizeBilinearOp: TFL_Op<"resize_bilinear", [
   }];
 
   let arguments = (ins
-    TFL_TensorOf<[F32, QI8, QUI8, TFL_Quint8]>:$input,
+    TFL_TensorOf<[F32, TFL_Quint8, QUI8, QI8, QI16]>:$input,
     TFL_I32Tensor:$size,
     BoolAttr:$align_corners,
     DefaultValuedAttr<BoolAttr, "false">:$half_pixel_centers
   );
 
   let results = (outs
-    TFL_TensorOf<[F32, QI8, QUI8, TFL_Quint8]>:$output
+    TFL_TensorOf<[F32, TFL_Quint8, QUI8, QI8, QI16]>:$output
   );
 
   let hasOptions = 1;
@@ -3830,6 +3830,9 @@ Ba et al. 'Layer Normalization'
 
     // Types of the optional intermediate tensors, which exist for fully
     // quantized LSTM op and hold the ranges of the intermediate tensors.
+    // The type for intermediate tenssors are be quant.calibrated when imported
+    // to only store calibrated min, max values. The proper quantization spec is
+    // determined while going through quantization passes.
     OptionalAttr<TypeAttr>:$input_to_input_intermediate,
     OptionalAttr<TypeAttr>:$input_to_forget_intermediate,
     OptionalAttr<TypeAttr>:$input_to_cell_intermediate,
@@ -3945,6 +3948,9 @@ def TFL_UnidirectionalSequenceLSTMOp :
 
     // Types of the optional intermediate tensors, which exist for fully
     // quantized op and hold the ranges of the intermediate tensors.
+    // The type for intermediate tenssors are be quant.calibrated when imported
+    // to only store calibrated min, max values. The proper quantization spec is
+    // determined while going through quantization passes.
     OptionalAttr<TypeAttr>:$input_to_input_intermediate,
     OptionalAttr<TypeAttr>:$input_to_forget_intermediate,
     OptionalAttr<TypeAttr>:$input_to_cell_intermediate,

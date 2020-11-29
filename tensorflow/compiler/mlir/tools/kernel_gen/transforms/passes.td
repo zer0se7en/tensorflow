@@ -45,8 +45,8 @@ def HloBufferizePass : Pass<"hlo-bufferize", "ModuleOp"> {
 }
 
 def FinalBufferizePass : Pass<"final-bufferize", "ModuleOp"> {
-  let summary = "Pass to transform operations from all non-hlo dialects on "
-                "values to buffer-based ones.";
+  let summary = "Pass to transform late operations on values to buffer based "
+                "ones.";
   let constructor = "transforms::CreateFinalBufferizePass()";
 }
 
