@@ -21,11 +21,22 @@ include "mlir/Pass/PassBase.td"
 def TFKernelToLLVMPass : Pass<"tf-kernel-to-llvm", "ModuleOp"> {
   let summary = "Pass for applying LLVM legalization patterns.";
   let constructor = "transforms::CreateTFKernelToLLVMPass()";
+  let options = [
+      Option<"blob_annotation_", "blob-annotation", "std::string",
+           /*default=*/"\"gpu.binary_blob\"", "Blob attribute name">,
+  ];
 }
 
-def EmbedTFFrameworkPass : Pass<"embed-tf-framework", "ModuleOp"> {
-  let summary = "Pass to embed TF Framework for allocation and error reporting";
-  let constructor = "tf_framework::CreateEmbedTFFrameworkPass()";
+def EmbedTFFrameworkFunctionAndAllocPass
+    : Pass<"embed-tf-framework-func-and-alloc", "ModuleOp"> {
+  let summary = "Pass to embed TF Framework for allocation and context";
+  let constructor = "tf_framework::CreateEmbedTFFrameworkFunctionAndAllocPass()";
+}
+
+def EmbedTFFrameworkAssertPass
+    : Pass<"embed-tf-framework-assert", "ModuleOp"> {
+  let summary = "Pass to rewrite assertions to TF framework calls";
+  let constructor = "tf_framework::CreateEmbedTFFrameworkAssertPass()";
 }
 
 def BufferReusePass : FunctionPass<"buffer-reuse"> {
@@ -50,25 +61,17 @@ def FinalBufferizePass : Pass<"final-bufferize", "ModuleOp"> {
   let constructor = "transforms::CreateFinalBufferizePass()";
 }
 
-def MaterializeBroadcastsPass : FunctionPass<"materialize-broadcast"> {
-  let summary = "Pass to materialize broadcasts";
-  let constructor = "transforms::CreateMaterializeBroadcastsPass()";
-}
-
-def UnfuseBatchNormPass : FunctionPass<"unfuse-batch-norm"> {
-  let summary = "Pass to unfuse batch norm";
-  let constructor = "transforms::CreateUnfuseBatchNormPass()";
-}
-
 def GpuKernelToBlobPass : Pass<"gpu-kernel-to-blob", "gpu::GPUModuleOp"> {
   let summary = "Pass to annotate GPU Module with its PTX";
   let options = [
     Option<"blob_annotation_", "blob-annotation", "std::string",
-           /*default=*/"", "Blob attribute name">,
+           /*default=*/"\"gpu.binary_blob\"", "Blob attribute name">,
     ListOption<"architectures_", "arch", "std::string", "GPU architectures">,
     Option<"generate_fatbin_", "generate-fatbin", "bool", /*default=*/"true",
            "Bundle machine code for the different architectures in one "
            "fatbin.">,
+    Option<"print_ptx_", "print-ptx", "bool", /*default=*/"false",
+           "Print generated PTX code per target architecture.">,
   ];
   let constructor = "transforms::CreateGpuKernelToBlobPass()";
 }

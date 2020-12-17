@@ -38,8 +38,8 @@ strip_common_include_path_prefix(
 strip_common_include_path_prefix(
     name = "strip_common_include_path_subspecs",
     hdr_labels = [
+        "//tensorflow/lite/delegates/coreml:coreml_delegate.h",
         "//tensorflow/lite/delegates/gpu:metal_delegate.h",
-        "//tensorflow/lite/experimental/delegates/coreml:coreml_delegate.h",
     ],
     prefix = "TensorFlowLiteC/",
 )
@@ -94,7 +94,7 @@ tflite_ios_static_framework(
     bundle_name = "TensorFlowLiteCCoreML",
     minimum_os_version = TFL_MINIMUM_OS_VERSION,
     deps = [
-        "//tensorflow/lite/experimental/delegates/coreml:coreml_delegate",
+        "//tensorflow/lite/delegates/coreml:coreml_delegate",
     ],
 )
 
@@ -121,6 +121,7 @@ cc_library(
     name = "tensorflow_lite_c",
     hdrs = [
         "//tensorflow/lite/c:c_api.h",
+        "//tensorflow/lite/c:c_api_types.h",
         "//tensorflow/lite/c:common.h",
         "//tensorflow/lite/delegates/xnnpack:xnnpack_delegate.h",
     ],
@@ -130,6 +131,7 @@ cc_library(
     ],
     deps = [
         "//tensorflow/lite/c:c_api",
+        "//tensorflow/lite/c:common",
         "//tensorflow/lite/delegates/xnnpack:xnnpack_delegate",
     ],
 )

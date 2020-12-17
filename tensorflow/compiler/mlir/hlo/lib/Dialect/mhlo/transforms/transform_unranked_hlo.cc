@@ -21,11 +21,11 @@ limitations under the License.
 #include "mlir/Dialect/SCF/SCF.h"
 #include "mlir/Dialect/Shape/IR/Shape.h"
 #include "mlir/Dialect/StandardOps/IR/Ops.h"
-#include "mlir/IR/Function.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/StandardTypes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -42,11 +42,11 @@ namespace {
                       sep fn(SqrtOp) sep fn(TanhOp)
 
 // TODO(herhut): Generate these out of op definitions.
-#define MAP_XLA_OPERATION_CWISE_BINARY(fn, sep)                           \
-  fn(AddOp) sep fn(Atan2Op) sep fn(ComplexOp) sep fn(DivOp) sep fn(MaxOp) \
-      sep fn(MinOp) sep fn(MulOp) sep fn(PowOp) sep fn(RemOp)             \
-          sep fn(ShiftLeftOp) sep fn(ShiftRightArithmeticOp)              \
-              sep fn(ShiftRightLogicalOp) sep fn(SubOp)
+#define MAP_XLA_OPERATION_CWISE_BINARY(fn, sep)                            \
+  fn(AddOp) sep fn(AndOp) sep fn(Atan2Op) sep fn(ComplexOp) sep fn(DivOp)  \
+      sep fn(MaxOp) sep fn(MinOp) sep fn(MulOp) sep fn(OrOp) sep fn(PowOp) \
+          sep fn(RemOp) sep fn(ShiftLeftOp) sep fn(ShiftRightArithmeticOp) \
+              sep fn(ShiftRightLogicalOp) sep fn(SubOp) sep fn(XorOp)
 
 // TODO(herhut): Generate these out of op definitions.
 #define MAP_CHLO_OPERATION_CWISE_UNARY(fn, sep)                         \
@@ -400,7 +400,7 @@ struct ConvertUnrankedDynamicBroadcastBinaryOp
         rewriter.create<SelectOp>(loc, greater_rank_lhs, lhs_rank, rhs_rank);
 
     // Generate a list of nested if/else statements to handle rank
-    // specializations from 1-6.
+    // specializations from 1 to `kMaxRankSpecialization`.
     scf::IfOp if_op = createIfOpForRankSpecializedBroadcastAndOp(
         rewriter, op, greater_rank, 1);
     OpBuilder if_builder = if_op.getThenBodyBuilder(rewriter.getListener());
@@ -419,13 +419,13 @@ struct ConvertUnrankedDynamicBroadcastBinaryOp
       else_builder = inner_if.getElseBodyBuilder(rewriter.getListener());
     }
     // Fire an assertion if none of the rank specializations applied (one of
-    // the ranks was greater than 6).
+    // the ranks was greater than `kMaxRankSpecialization`).
     else_builder.create<AssertOp>(
         loc,
         GreaterRankIsN(else_builder, op.getLoc(), greater_rank,
                        kMaxRankSpecialization),
-        "Input for dynamic binary op lowering was of a rank greater than "
-        "6");
+        "Input for dynamic binary op lowering was of a rank greater than " +
+            std::to_string(kMaxRankSpecialization));
     // Add the rank 6 specialization to the innermost else block.
     createRankSpecializedBroadcastAndOp(else_builder, op, lhs, rhs,
                                         kMaxRankSpecialization);
