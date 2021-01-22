@@ -214,9 +214,7 @@ def LHLO_ReduceOp: LHLO_Op<"reduce", [SameVariadicOperandSize]>, BASE_HLO_Reduce
   let regions = (region SizedRegion<1>:$body);
 }
 
-def LHLO_ReduceWindowOp: LHLO_Op<"reduce_window", [
-      SingleBlockImplicitTerminator<"TerminatorOp">
-    ]>, BASE_HLO_ReduceWindowOp {
+def LHLO_ReduceWindowOp: LHLO_Op<"reduce_window", []>, BASE_HLO_ReduceWindowOp {
 
   let arguments = (ins
     Arg<LHLO_Buffer, "", [MemRead]>:$operand,
@@ -309,12 +307,22 @@ def LHLO_SliceOp: LHLO_Op<
   );
 }
 
-def HLO_DynamicUpdateSliceOp: LHLO_Op<"dynamic-update-slice", []> {
+def LHLO_DynamicSliceOp: LHLO_Op<"dynamic_slice",
+      [AllElementTypesMatch<["operand", "output"]>]>, BASE_HLO_DynamicSliceOp {
+  let arguments = (ins
+    Arg<LHLO_Buffer, "", [MemRead]>:$operand,
+    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$start_indices,
+    Arg<LHLO_Buffer, "", [MemWrite]>:$output,
+    I64ElementsAttr:$slice_sizes
+  );
+}
+
+def LHLO_DynamicUpdateSliceOp: LHLO_Op<"dynamic-update-slice", []>, BASE_HLO_DynamicUpdateSliceOp {
   let arguments = (ins
     Arg<LHLO_Buffer, "", [MemRead]>:$operand,
     Arg<LHLO_Buffer, "", [MemRead]>:$update,
-    Arg<LHLO_Buffer, "", [MemWrite]>:$output,
-    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$start_indices
+    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$start_indices,
+    Arg<LHLO_Buffer, "", [MemWrite]>:$output
   );
 }
 
@@ -575,16 +583,16 @@ def LHLO_CholeskyOp: LHLO_Op<"cholesky", [SameOperandsElementType]>, BASE_HLO_Ch
   );
 }
 
-def LHLO_Infeed: LHLO_Op<"infeed", []>, BASE_HLO_InfeedOp {
+def LHLO_InfeedOp: LHLO_Op<"infeed", []>, BASE_HLO_InfeedOp {
   let arguments = (ins
-    Arg<LHLO_Buffer, "", [MemWrite]>:$output,
+    Arg<Variadic<LHLO_Buffer>, "", [MemWrite]>:$outputs,
     DefaultValuedAttr<StrAttr, "">:$config
   );
 }
 
-def LHLO_Outfeed: LHLO_Op<"outfeed", []> {
+def LHLO_OutfeedOp: LHLO_Op<"outfeed", []> {
   let arguments = (ins
-    Arg<LHLO_Buffer, "", [MemRead]>:$operand,
+    Arg<Variadic<LHLO_Buffer>, "", [MemRead]>:$operands,
     DefaultValuedAttr<StrAttr, "">:$config
   );
 }

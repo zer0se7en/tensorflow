@@ -862,6 +862,39 @@ class DefFunctionTest(xla_test.XLATestCase):
       self.assertEqual(out.shape[0], 50)
       self.assertEqual(out.shape[1], 2)
 
+  def testTfAssert(self):
+    with ops.device('device:{}:0'.format(self.device)):
+
+      @def_function.function(jit_compile=True)
+      def f(x):
+        control_flow_ops.Assert(x == 1, ['Wrong value'])
+
+      f(constant_op.constant(1))
+
+  def testTensorArrayErrorMessage(self):
+    with ops.device('device:{}:0'.format(self.device)):
+
+      @def_function.function(jit_compile=True)
+      def f():
+        # The error message as old and new bridge differ in which op they flag.
+        # The one points to the creation of the unitialized tensor array, the
+        # other is the use of the unitialized tensor array.
+        ta = tensor_array_ops.TensorArray(  # EXPECTED_MESSAGE_NEW
+            dtype=dtypes.float32,
+            size=2,
+            dynamic_size=True,
+            element_shape=(None,))
+        return ta.concat()  # EXPECTED_MESSAGE_OLD
+
+      if test_util.is_mlir_bridge_enabled():
+        with self.assertRaisesRegex(errors.InternalError,
+                                    'EXPECTED_MESSAGE_NEW'):
+          f()
+      else:
+        with self.assertRaisesRegex(errors.InvalidArgumentError,
+                                    'EXPECTED_MESSAGE_OLD'):
+          f()
+
 
 if __name__ == '__main__':
   ops.enable_eager_execution()
