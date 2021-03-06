@@ -497,7 +497,7 @@ class HloInstruction {
   static StatusOr<std::unique_ptr<HloInstruction>> CreateFromProto(
       const HloInstructionProto& proto,
       const absl::flat_hash_map<int64, HloInstruction*>& instruction_map,
-      const absl::flat_hash_map<int64, HloComputation*>& computation_map,
+      const absl::flat_hash_map<int64, HloComputation*>& computation_map = {},
       bool prohibit_empty_literal = true);
 
   // Creates a parameter-retrieving instruction.
@@ -1043,6 +1043,7 @@ class HloInstruction {
 
   // Returns the opcode for this instruction.
   HloOpcode opcode() const { return opcode_; }
+  HloOpcode* mutable_opcode() { return &opcode_; }
 
   // Returns true if this instruction has a side effect, irrespective of whether
   // any called computations may contain an instruction with side effects.
@@ -1349,9 +1350,6 @@ class HloInstruction {
       const HloPrintOptions& options,
       CanonicalNameMap* canonical_name_map) const;
 
-  const absl::optional<uint64>& fingerprint() const { return fingerprint_; }
-  void set_fingerprint(const uint64 fingerprint) { fingerprint_ = fingerprint; }
-
   // Returns a serialized representation of this instruction.
   virtual HloInstructionProto ToProto() const;
 
@@ -1616,6 +1614,9 @@ class HloInstruction {
   }
   void set_metadata_op_name(const std::string& name) {
     metadata_.set_op_name(name);
+  }
+  void set_logical_creation_pass_id(int64 pass_id) {
+    metadata_.set_logical_creation_pass_id(pass_id);
   }
   const OpMetadata& metadata() const { return metadata_; }
 
@@ -2058,9 +2059,6 @@ class HloInstruction {
   // Has this instruction been marked as dead? Accessed by friend class
   // HloInstruction.
   bool IsMarkedAsDead() const { return marked_as_dead_; }
-
-  // Fingerprint of this instruction alone.
-  absl::optional<uint64> fingerprint_;
 
   int unique_id_;  // Unique to this HloInstruction within a HloModule
 

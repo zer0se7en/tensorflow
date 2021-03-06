@@ -112,6 +112,26 @@ cc_library(
 )
 
 cc_library(
+    name = "conv_metal",
+    srcs = ["conv_metal.cc"],
+    hdrs = ["conv_metal.h"],
+    deps = [
+        "//tensorflow/lite/delegates/gpu/common:data_type",
+        "//tensorflow/lite/delegates/gpu/common:gpu_info",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:shape",
+        "//tensorflow/lite/delegates/gpu/common:types",
+        "//tensorflow/lite/delegates/gpu/common:util",
+        "//tensorflow/lite/delegates/gpu/common:winograd_util",
+        "//tensorflow/lite/delegates/gpu/common/task:gpu_operation",
+        "//tensorflow/lite/delegates/gpu/common/task:util",
+        "//tensorflow/lite/delegates/gpu/common/task:weights_conversion",
+        "//tensorflow/lite/delegates/gpu/common/task:weights_layout",
+        "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
     name = "conv_powervr",
     srcs = ["conv_powervr.cc"],
     hdrs = ["conv_powervr.h"],
@@ -137,6 +157,19 @@ cc_library(
 )
 
 cc_library(
+    name = "conv_powervr_test_util",
+    testonly = 1,
+    srcs = ["conv_powervr_test_util.cc"],
+    hdrs = ["conv_powervr_test_util.h"],
+    deps = [
+        ":conv_powervr",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+    ],
+)
+
+cc_library(
     name = "conv_weights_converter",
     srcs = ["conv_weights_converter.cc"],
     hdrs = ["conv_weights_converter.h"],
@@ -147,6 +180,20 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common/task:util",
         "//tensorflow/lite/delegates/gpu/common/task:weights_layout",
         "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
+    ],
+)
+
+cc_library(
+    name = "conv_weights_converter_test_util",
+    testonly = 1,
+    srcs = ["conv_weights_converter_test_util.cc"],
+    hdrs = ["conv_weights_converter_test_util.h"],
+    deps = [
+        ":conv_weights_converter",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+        "//tensorflow/lite/delegates/gpu/common/task:weights_conversion",
     ],
 )
 
@@ -171,6 +218,19 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common/task:weights_layout",
         "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
         "@com_google_absl//absl/strings",
+    ],
+)
+
+cc_library(
+    name = "convolution_transposed_test_util",
+    testonly = 1,
+    srcs = ["convolution_transposed_test_util.cc"],
+    hdrs = ["convolution_transposed_test_util.h"],
+    deps = [
+        ":convolution_transposed",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
     ],
 )
 
@@ -238,6 +298,19 @@ cc_library(
 )
 
 cc_library(
+    name = "convolution_transposed_4x4_test_util",
+    testonly = 1,
+    srcs = ["convolution_transposed_4x4_test_util.cc"],
+    hdrs = ["convolution_transposed_4x4_test_util.h"],
+    deps = [
+        ":convolution_transposed_4x4",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+    ],
+)
+
+cc_library(
     name = "convolution_transposed_thin",
     srcs = ["convolution_transposed_thin.cc"],
     hdrs = ["convolution_transposed_thin.h"],
@@ -278,6 +351,19 @@ cc_library(
 )
 
 cc_library(
+    name = "depthwise_conv_test_util",
+    testonly = 1,
+    srcs = ["depthwise_conv_test_util.cc"],
+    hdrs = ["depthwise_conv_test_util.h"],
+    deps = [
+        ":depthwise_conv",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+    ],
+)
+
+cc_library(
     name = "depthwise_conv_3x3",
     srcs = ["depthwise_conv_3x3.cc"],
     hdrs = ["depthwise_conv_3x3.h"],
@@ -293,6 +379,50 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common/task:tensor_desc",
         "//tensorflow/lite/delegates/gpu/common/task:texture2d_desc",
         "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
+    ],
+)
+
+cc_library(
+    name = "depthwise_conv_3x3_test_util",
+    testonly = 1,
+    srcs = ["depthwise_conv_3x3_test_util.cc"],
+    hdrs = ["depthwise_conv_3x3_test_util.h"],
+    deps = [
+        ":depthwise_conv_3x3",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+    ],
+)
+
+cc_library(
+    name = "depthwise_conv_3x3_stride_h2",
+    srcs = ["depthwise_conv_3x3_stride_h2.cc"],
+    hdrs = ["depthwise_conv_3x3_stride_h2.h"],
+    deps = [
+        "//tensorflow/lite/delegates/gpu/common:data_type",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:shape",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common:tensor",
+        "//tensorflow/lite/delegates/gpu/common:types",
+        "//tensorflow/lite/delegates/gpu/common/task:buffer_desc",
+        "//tensorflow/lite/delegates/gpu/common/task:gpu_operation",
+        "//tensorflow/lite/delegates/gpu/common/task:texture2d_desc",
+        "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
+    ],
+)
+
+cc_library(
+    name = "depthwise_conv_3x3_stride_h2_test_util",
+    testonly = 1,
+    srcs = ["depthwise_conv_3x3_stride_h2_test_util.cc"],
+    hdrs = ["depthwise_conv_3x3_stride_h2_test_util.h"],
+    deps = [
+        ":depthwise_conv_3x3_stride_h2",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
     ],
 )
 
@@ -335,6 +465,7 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:util",
         "//tensorflow/lite/delegates/gpu/common/task:buffer_desc",
         "//tensorflow/lite/delegates/gpu/common/task:gpu_operation",
+        "//tensorflow/lite/delegates/gpu/common/task:storage_type_util",
         "//tensorflow/lite/delegates/gpu/common/task:tensor_desc",
         "//tensorflow/lite/delegates/gpu/common/task:tensor_linear_desc",
         "//tensorflow/lite/delegates/gpu/common/task:texture2d_desc",
@@ -396,6 +527,19 @@ cc_library(
 )
 
 cc_library(
+    name = "max_unpooling_test_util",
+    testonly = 1,
+    srcs = ["max_unpooling_test_util.cc"],
+    hdrs = ["max_unpooling_test_util.h"],
+    deps = [
+        ":max_unpooling",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+    ],
+)
+
+cc_library(
     name = "mean_stddev_normalization",
     srcs = ["mean_stddev_normalization.cc"],
     hdrs = ["mean_stddev_normalization.h"],
@@ -405,6 +549,19 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:types",
         "//tensorflow/lite/delegates/gpu/common/task:gpu_operation",
         "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
+    ],
+)
+
+cc_library(
+    name = "mean_stddev_normalization_test_util",
+    testonly = 1,
+    srcs = ["mean_stddev_normalization_test_util.cc"],
+    hdrs = ["mean_stddev_normalization_test_util.h"],
+    deps = [
+        ":mean_stddev_normalization",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
     ],
 )
 
@@ -446,6 +603,19 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common/task:tensor_desc",
         "//tensorflow/lite/delegates/gpu/common/task:util",
         "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
+    ],
+)
+
+cc_library(
+    name = "pooling_test_util",
+    testonly = 1,
+    srcs = ["pooling_test_util.cc"],
+    hdrs = ["pooling_test_util.h"],
+    deps = [
+        ":pooling",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
     ],
 )
 
@@ -614,6 +784,19 @@ cc_library(
 )
 
 cc_library(
+    name = "resize_test_util",
+    testonly = 1,
+    srcs = ["resize_test_util.cc"],
+    hdrs = ["resize_test_util.h"],
+    deps = [
+        ":resize",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+    ],
+)
+
+cc_library(
     name = "softmax",
     srcs = ["softmax.cc"],
     hdrs = ["softmax.h"],
@@ -675,6 +858,19 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:operations",
         "//tensorflow/lite/delegates/gpu/common:status",
         "//tensorflow/lite/delegates/gpu/common/task:testing_util",
+    ],
+)
+
+cc_library(
+    name = "split",
+    srcs = ["split.cc"],
+    hdrs = ["split.h"],
+    deps = [
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common:types",
+        "//tensorflow/lite/delegates/gpu/common/task:gpu_operation",
+        "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
     ],
 )
 
@@ -744,5 +940,19 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common/task:tensor_linear_desc",
         "//tensorflow/lite/delegates/gpu/common/task:work_group_picking",
         "@com_google_absl//absl/strings:str_format",
+    ],
+)
+
+cc_library(
+    name = "winograd_test_util",
+    testonly = 1,
+    srcs = ["winograd_test_util.cc"],
+    hdrs = ["winograd_test_util.h"],
+    deps = [
+        ":winograd",
+        "//tensorflow/lite/delegates/gpu/common:operations",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common:winograd_util",
+        "//tensorflow/lite/delegates/gpu/common/task:testing_util",
     ],
 )

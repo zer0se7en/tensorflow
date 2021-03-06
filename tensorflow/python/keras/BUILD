@@ -18,6 +18,12 @@ filegroup(
     ],
 )
 
+config_setting(
+    name = "no_keras_py_deps",
+    define_values = {"no_keras_py_deps": "true"},
+    visibility = ["//visibility:public"],
+)
+
 py_library(
     name = "keras",
     srcs = [
@@ -154,6 +160,7 @@ py_library(
     srcs_version = "PY3",
     deps = [
         ":backend",
+        "//tensorflow/python:errors",
         "//tensorflow/python/keras/distribute:distributed_file_utils",
         "//tensorflow/python/keras/distribute:worker_training_state",
         "//tensorflow/python/keras/protobuf:projector_config_proto_py",
@@ -186,6 +193,7 @@ py_library(
     srcs_version = "PY3",
     deps = [
         ":backend",
+        "//tensorflow/python:errors",
         "//tensorflow/python/keras/utils:engine_utils",
         "//tensorflow/python/profiler:profiler_v2",
     ],
@@ -325,6 +333,17 @@ py_library(
         "//tensorflow/python/keras/utils:engine_utils",
     ],
 )
+
+# Internally six.moves.urllib.request.urlretrieve library requires Google
+# SSL context to be provided to work in python 3. This isn't needed in OSS.
+# copybara:uncomment_begin(google-only)
+# py_library(
+#     name = "url_utils",
+#     srcs = ["google/url_utils.py"],
+#     srcs_version = "PY3",
+#     deps = ["//pyglib/contrib/google_ssl"],
+# )
+# copybara:uncomment_end
 
 py_library(
     name = "testing_utils",
@@ -555,10 +574,12 @@ tf_py_test(
     shard_count = 6,
     tags = [
         "no_oss",
+        "no_tfrt",  # TODO(b/179690526)
         "notsan",
     ],
     deps = [
         ":keras",
+        "//tensorflow/python/profiler:profiler_v2",
         "//third_party/py/numpy",
         "@absl_py//absl/testing:parameterized",
         "@six_archive//:six",
@@ -660,3 +681,29 @@ tf_py_test(
         "@absl_py//absl/testing:parameterized",
     ],
 )
+
+# copybara:uncomment_begin(google-only)
+# tf_py_test(
+#     name = "url_utils_test",
+#     srcs = ["google/url_utils_test.py"],
+#     python_version = "PY3",
+#     deps = [
+#         ":url_utils",
+#         "//testing/pymocks:matchers",
+#         "//tensorflow/python:client_testlib",
+#     ],
+# )
+#
+# tf_py_test(
+#     name = "gfile_utils_test",
+#     size = "small",
+#     srcs = ["google_utils/gfile_utils_test.py"],
+#     python_version = "PY3",
+#     deps = [
+#         ":keras",
+#         "//testing/pymocks:matchers",
+#         "//tensorflow/python:client_testlib",
+#         "//tensorflow/python:util",
+#     ],
+# )
+# copybara:uncomment_end

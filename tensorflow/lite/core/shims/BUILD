@@ -43,7 +43,7 @@ cc_library(
     copts = tflite_copts() + tflite_copts_warnings(),
     visibility = [
         "//tensorflow/lite:__subpackages__",
-        "//tensorflow_lite_support:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
     ],
     deps = [
         "//tensorflow/lite:allocation",
@@ -107,7 +107,7 @@ cc_library(
     compatible_with = get_compatible_with_portable(),
     visibility = [
         "//tensorflow/lite:__subpackages__",
-        "//tensorflow_lite_support:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
     ],
     deps = [
         "//tensorflow/lite:cc_api",
@@ -135,7 +135,7 @@ cc_library(
     copts = tflite_copts_warnings(),
     visibility = [
         "//tensorflow/lite:__subpackages__",
-        "//tensorflow_lite_support:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
     ],
     deps = ["//tensorflow/lite/c:c_api"],
 )
@@ -147,7 +147,7 @@ cc_library(
     copts = tflite_copts_warnings(),
     visibility = [
         "//tensorflow/lite:__subpackages__",
-        "//tensorflow_lite_support:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
     ],
     deps = ["//tensorflow/lite/c:c_api_experimental"],
 )
@@ -159,7 +159,7 @@ cc_library(
     copts = tflite_copts_warnings(),
     visibility = [
         "//tensorflow/lite:__subpackages__",
-        "//tensorflow_lite_support:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
     ],
     deps = ["//tensorflow/lite/c:common"],
 )
@@ -171,7 +171,7 @@ cc_library(
     copts = tflite_copts_warnings(),
     visibility = [
         "//tensorflow/lite:__subpackages__",
-        "//tensorflow_lite_support:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
     ],
     deps = ["//tensorflow/lite/c:common"],
 )
@@ -183,6 +183,58 @@ build_test(
         ":c_api",
         ":c_api_experimental",
         ":common",
+    ],
+)
+
+#------------------------------------------------------------------------------
+# Testing infrastructure
+
+cc_library(
+    name = "c_shims_test_util",
+    testonly = True,
+    srcs = ["c/shims_test_util.cc"],
+    hdrs = ["c/shims_test_util.h"],
+    visibility = [
+        "//tensorflow/lite:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
+    ],
+)
+
+cc_library(
+    name = "cc_shims_test_util",
+    testonly = True,
+    hdrs = ["cc/shims_test_util.h"],
+    visibility = [
+        "//tensorflow/lite:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
+    ],
+    deps = [
+        ":c_shims_test_util",
+        "@com_google_googletest//:gtest",
+    ],
+)
+
+build_test(
+    name = "shims_test_util_build_test",
+    targets = [
+        ":c_shims_test_util",
+        ":cc_shims_test_util",
+    ],
+)
+
+#------------------------------------------------------------------------------
+# JNI bindings (Java API and Java Tasks library)
+
+# Contains code to initialize TFLite through JNI in the internal version.
+cc_library(
+    name = "jni_initialization",
+    srcs = [],
+    # Prevent automated tools from removing this target as a dependency due to
+    # it being empty.
+    tags = ["keep_dep"],
+    visibility = [
+        "//tensorflow/lite:__subpackages__",
+        "@org_tensorflow_lite_support//tensorflow_lite_support:__subpackages__",
     ],
 )
 

@@ -24,9 +24,9 @@ import os
 import sys
 import warnings
 
+from absl import app
 import six
 from six.moves import zip
-# Needed to enable TF2 by default.
 import tensorflow as tf  # pylint: disable=unused-import
 
 from tensorflow.lite.python import lite
@@ -35,8 +35,9 @@ from tensorflow.lite.toco import toco_flags_pb2 as _toco_flags_pb2
 from tensorflow.lite.toco.logging import gen_html
 from tensorflow.python import tf2
 from tensorflow.python.framework import dtypes
-from tensorflow.python.platform import app
 from tensorflow.python.util import keras_deps
+
+# Needed to enable TF2 by default.
 
 
 def _parse_array(values, type_fn=str):
@@ -71,8 +72,8 @@ def _parse_inference_type(value, flag):
   if value == "UINT8" or value == "QUANTIZED_UINT8":
     return dtypes.uint8
   raise ValueError(
-      "Unsupported value for `{}` flag. Expected FLOAT, INT8 or UINT8, instead "
-      "got {}.".format(flag, value))
+      "Unsupported value for `{}` flag. Expected FLOAT, INT8, UINT8, or "
+      "QUANTIZED_UINT8 instead got {}.".format(flag, value))
 
 
 def _get_tflite_converter(flags):

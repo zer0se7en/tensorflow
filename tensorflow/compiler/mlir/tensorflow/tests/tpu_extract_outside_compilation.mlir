@@ -572,6 +572,8 @@ module attributes {tf.versions = {producer = 888 : i32}, tf.devices = ["/job:wor
     // CHECK:              "tf.D"(%[[ARG_RECV_OUTPUT]]#0, %[[ARG_RECV_OUTPUT]]#1)
     // CHECK-NOT:          "tf._XlaSendFromHostV2"(%[[PROGRAM_OUTPUT]], %[[DEVICE_ORDINAL]])
     // CHECK:              "tf.Yield"() : () -> ()
+    // CHECK:            _else_func_name = "test_else_name"
+    // CHECK-SAME        _then_func_name = "test_then_name"
     // CHECK:          "tf_device.cluster"
     // CHECK:            %[[A_OUTPUT:[0-9]*]] = "tf.A"
     // CHECK:            %[[B_OUTPUT:[0-9]*]] = "tf.B"
@@ -595,7 +597,7 @@ module attributes {tf.versions = {producer = 888 : i32}, tf.devices = ["/job:wor
           "tf.Yield"() : () -> ()
         }, {
           "tf.Yield"() : () -> ()
-        }) { is_stateless = false} : (tensor<i1>) -> ()
+        }) { is_stateless = false, _then_func_name = "test_then_name", _else_func_name = "test_else_name"} : (tensor<i1>) -> ()
 
         %5 = "tf.E"() : () -> tensor<?xi32>
         tf_device.return %5 : tensor<?xi32>
@@ -674,7 +676,7 @@ module attributes {tf.versions = {producer = 888 : i32}, tf.devices = ["/job:wor
     // CHECK-DAG:        %[[DEVICE_ORDINAL:.+]] = "tf._TPUDeviceOrdinalPlaceholder"
     // CHECK-NEXT:       %[[RECV_OUTPUT:[0-9]*]]:3 = "tf._XlaRecvAtHostV2"(%[[PROGRAM_OUTPUT]], %[[DEVICE_ORDINAL]])
     // CHECK-SAME:       key = "host_compute_channel_0_args"
-    // CHECK-SAME:       (tensor<2x!tf.string>, tensor<i64>) -> (tensor<?xi32>, tensor<?xi32>, tensor<i1>)
+    // CHECK-SAME:       (tensor<3x!tf.string>, tensor<i64>) -> (tensor<?xi32>, tensor<?xi32>, tensor<i1>)
     // CHECK-NEXT:       tf.IfRegion"(%[[RECV_OUTPUT]]#2)
     // CHECK:              "tf.D"(%[[RECV_OUTPUT]]#0, %[[RECV_OUTPUT]]#1, %[[F_OUT]])
     // CHECK-NOT:          "tf._XlaSendFromHostV2"
@@ -726,11 +728,11 @@ module attributes {tf.versions = {producer = 888 : i32}, tf.devices = ["/job:wor
     // CHECK-DAG:        %[[DEVICE_ORDINAL:.+]] = "tf._TPUDeviceOrdinalPlaceholder"
     // CHECK-NEXT:       %[[RECV_OUTPUT_PREDICATE:[0-9]*]] = "tf._XlaRecvAtHostV2"(%[[PROGRAM_OUTPUT]], %[[DEVICE_ORDINAL]])
     // CHECK-SAME:       key = "if_predicate_channel_1"
-    // CHECK-SAME:       (tensor<2x!tf.string>, tensor<i64>) -> tensor<i1>
+    // CHECK-SAME:       (tensor<3x!tf.string>, tensor<i64>) -> tensor<i1>
     // CHECK-NEXT:       tf.IfRegion"(%[[RECV_OUTPUT_PREDICATE]])
     // CHECK-NEXT:         %[[RECV_OUTPUT:[0-9]*]]:2 = "tf._XlaRecvAtHostV2"(%[[PROGRAM_OUTPUT]], %[[DEVICE_ORDINAL]])
     // CHECK-SAME:         key = "host_compute_channel_0_args"
-    // CHECK-SAME:         (tensor<2x!tf.string>, tensor<i64>) -> (tensor<?xi32>, tensor<i1>)
+    // CHECK-SAME:         (tensor<3x!tf.string>, tensor<i64>) -> (tensor<?xi32>, tensor<i1>)
     // CHECK-NEXT:         tf.IfRegion"(%[[RECV_OUTPUT]]#1)
     // CHECK-NEXT:           "tf.H"(%[[RECV_OUTPUT]]#0, %[[F_OUT]])
     // CHECK:                "tf.Yield"() : () -> ()
@@ -1213,7 +1215,7 @@ module attributes {tf.versions = {producer = 888 : i32}, tf.devices = ["/job:wor
     // CHECK-DAG:        %[[DEVICE_ORDINAL:.+]] = "tf._TPUDeviceOrdinalPlaceholder"
     // CHECK-NEXT:       %[[RECV_OUTPUT:[0-9]*]]:3 = "tf._XlaRecvAtHostV2"(%[[PROGRAM_OUTPUT]], %[[DEVICE_ORDINAL]])
     // CHECK-SAME:       key = "host_compute_channel_0_args"
-    // CHECK-SAME:       (tensor<2x!tf.string>, tensor<i64>) -> (tensor<?xi32>, tensor<?xi32>, tensor<i1>)
+    // CHECK-SAME:       (tensor<3x!tf.string>, tensor<i64>) -> (tensor<?xi32>, tensor<?xi32>, tensor<i1>)
     // CHECK-NEXT:       tf.IfRegion"(%[[RECV_OUTPUT]]#2)
     // CHECK:              %[[D_OUTPUT:[0-9]*]] = "tf.D"(%[[RECV_OUTPUT]]#0, %[[RECV_OUTPUT]]#1, %[[F_OUT]])
     // CHECK-NEXT:         %[[J_OUTPUT:[0-9]*]] = "tf.J"

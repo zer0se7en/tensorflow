@@ -1008,6 +1008,7 @@ TfLiteStatus Subgraph::Invoke() {
     ReportError("Non-persistent memory is not available.");
     return kTfLiteError;
   }
+  TFLITE_SCOPED_TAGGED_DEFAULT_PROFILE(profiler_.get(), "Invoke");
 
   // Invocations are always done in node order.
   // Note that calling Invoke repeatedly will cause the original memory plan to
@@ -1210,7 +1211,8 @@ TfLiteStatus Subgraph::SetTensorParametersReadOnly(
   // ensure the buffer is large enough. However, we need to skip string tensors
   // and sparse tensors because their sizes change with the contents.
   // TODO(b/145615516): Extend BytesRequired to check sparse tensors.
-  if (type != kTfLiteString && sparsity == nullptr) {
+  if (type != kTfLiteString && type != kTfLiteResource &&
+      type != kTfLiteVariant && sparsity == nullptr) {
     size_t required_bytes;
     TF_LITE_ENSURE_OK(&context_,
                       BytesRequired(type, dims, rank, &required_bytes));
@@ -1262,7 +1264,8 @@ TfLiteStatus Subgraph::SetTensorParametersReadWrite(
   TF_LITE_ENSURE(&context_,
                  tensor_index < context_.tensors_size && tensor_index >= 0);
   size_t required_bytes = 0;
-  if (type != kTfLiteString) {
+  if (type != kTfLiteString && type != kTfLiteResource &&
+      type != kTfLiteVariant) {
     // These types will be allocated in our arena so we need to record how
     // many bytes we will need based on the dimensions. String tensors are
     // allocated dynamically and we can't know ahead of time how much space
@@ -1272,7 +1275,8 @@ TfLiteStatus Subgraph::SetTensorParametersReadWrite(
   }
 
   TfLiteAllocationType allocation_type = kTfLiteArenaRw;
-  if (type == kTfLiteString) {
+  if (type == kTfLiteString || type == kTfLiteResource ||
+      type == kTfLiteVariant) {
     if (is_variable) {
       // We don't have a real use case for string variable tensor.
       ReportError("String variable tensor isn't supported.");
@@ -1315,7 +1319,8 @@ TfLiteStatus Subgraph::ResizeTensorImpl(TfLiteTensor* tensor,
       tensor->allocation_type == kTfLiteCustom) {
     tensor_resized_since_op_invoke_ |=
         TfLiteIntArrayEqual(tensor->dims, new_size) == 0;
-    if (tensor->type != kTfLiteString) {
+    if (tensor->type != kTfLiteString && tensor->type != kTfLiteResource &&
+        tensor->type != kTfLiteVariant) {
       size_t bytesRequired;
       TfLiteStatus status = BytesRequired(tensor->type, new_size->data,
                                           new_size->size, &bytesRequired);
@@ -1614,5 +1619,15 @@ TfLiteStatus Subgraph::SetCustomAllocationForTensor(
 
   return kTfLiteOk;
 }
+
+void Subgraph::SetName(const char* name) {
+  if (name) {
+    name_ = name;
+  } else {
+    name_ = "";
+  }
+}
+
+const std::string& Subgraph::GetName() const { return name_; }
 
 }  // namespace tflite

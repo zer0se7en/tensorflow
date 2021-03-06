@@ -580,6 +580,7 @@ cc_library(
     copts = tf_copts(),
     deps = [
         "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/strings",
         "//tensorflow/core:framework",
         "//tensorflow/core:graph",
         "//tensorflow/core:lib_proto_parsing",
@@ -624,3 +625,12 @@ pybind_extension(
         "@pybind11",
     ],
 )
+
+# copybara:uncomment_begin(google-only)
+# py_proto_library(
+#     name = "trt_engine_instance_proto_py_pb2",
+#     has_services = 0,
+#     api_version = 2,
+#     deps = [":trt_engine_instance_proto"],
+# )
+# copybara:uncomment_end

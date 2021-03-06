@@ -58,8 +58,10 @@ limitations under the License.
 #include "tensorflow/compiler/mlir/lite/utils/attribute_utils.h"
 #include "tensorflow/compiler/mlir/lite/utils/validators.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops.h"
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_ops_n_z.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/compiler/mlir/tensorflow/utils/convert_tensor.h"
+#include "tensorflow/compiler/mlir/tensorflow/utils/error_util.h"
 #include "tensorflow/core/framework/tensor.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/kernels/tensor_list.h"
@@ -72,20 +74,24 @@ limitations under the License.
 namespace mlir {
 namespace {
 
-class TensorListPatternRewriter : public PatternRewriter {
- public:
-  explicit TensorListPatternRewriter(FuncOp fn)
-      : PatternRewriter(fn.getContext()) {}
-};
-
 /// Lower TensorList ops in functions for subsequent legalization.
 struct LowerStaticTensorListPass
     : public PassWrapper<LowerStaticTensorListPass, OperationPass<ModuleOp>> {
+  LowerStaticTensorListPass() = default;
+  LowerStaticTensorListPass(const LowerStaticTensorListPass &) {}
+  explicit LowerStaticTensorListPass(bool allow_tensorlist_pass_through) {
+    this->allow_tensorlist_pass_through = allow_tensorlist_pass_through;
+  }
+
   void runOnOperation() override;
 
-  // Apply type and op changes within a function.
-  LogicalResult RewriteFunction(FuncOp func,
-                                TensorListPatternRewriter *rewriter);
+  Option<bool> allow_tensorlist_pass_through{
+      *this, "allow-tensorlist-pass-through",
+      llvm::cl::desc(
+          "When specified to true, if the tensorlist ops can't be properly "
+          "legalized by this pass, then the IR won't be changed so that "
+          "tensorlist ops can pass through (default false)"),
+      llvm::cl::init(false)};
 };
 
 Value CreateI32SplatConst(Location loc, PatternRewriter *rewriter,
@@ -166,6 +172,22 @@ TF::SliceOp CreateSliceOpForTensorList(Location loc, Value input_list,
                                        start_position, slice_size);
 }
 
+template <typename OpT>
+class TensorListOpConverterBase : public OpConversionPattern<OpT> {
+ public:
+  explicit TensorListOpConverterBase<OpT>(MLIRContext *context,
+                                          bool allow_tensorlist_pass_through)
+      : OpConversionPattern<OpT>::OpConversionPattern(context),
+        allow_tensorlist_pass_through_(allow_tensorlist_pass_through) {}
+
+ protected:
+  // This flag will control the behavior of error emitting during rewrite:
+  // 1) If it's true, then patterns will only emit errors during debug or
+  // tracing mode. 2) If it's false, then patterns will emit standard errors
+  // when there is a rewrite failure.
+  bool allow_tensorlist_pass_through_;
+};
+
 // Converts tf.Const containing variant of type TensorList to a tensor of
 // primitive element types. Each of the individual tensor in the list is
 // converted to an ElementsAttr and then those are packed together using
@@ -214,14 +236,8 @@ struct ConvertConst : public OpConversionPattern<TF::ConstOp> {
     // If the list is empty, directly create the final result instead of
     // creating the tf.Pack op. tf.Pack op requires at least one operand.
     if (tensors.empty()) {
-      absl::InlinedVector<tensorflow::int64, 4> tf_shape;
-      tf_shape.reserve(result_shape.size());
-      for (int64_t dim : result_shape) {
-        tf_shape.push_back(dim);
-      }
-
       tensorflow::Tensor tensor(list->element_dtype,
-                                tensorflow::TensorShape(tf_shape));
+                                tensorflow::TensorShape(result_shape));
       auto attr_or = tensorflow::ConvertTensor(tensor, &rewriter);
       if (!attr_or.ok()) return failure();
       rewriter.replaceOpWithNewOp<TF::ConstOp>(op, attr_or.ValueOrDie());
@@ -317,8 +333,9 @@ struct ConvertTensorListSetItem
 // to generate an equivalent raw tensor. Derived classes are required to
 // override GetNumElements method.
 template <typename OpT>
-struct ConvertTensorListInitOp : public OpConversionPattern<OpT> {
-  using OpConversionPattern<OpT>::OpConversionPattern;
+struct ConvertTensorListInitOp : public TensorListOpConverterBase<OpT> {
+  using TensorListOpConverterBase<OpT>::TensorListOpConverterBase;
+  using TensorListOpConverterBase<OpT>::allow_tensorlist_pass_through_;
 
   // Create and return a 1-d tensor with exactly one element equal to the number
   // of list elements to initialize the output tensor list with.
@@ -335,11 +352,13 @@ struct ConvertTensorListInitOp : public OpConversionPattern<OpT> {
     if (!(dtype.isF16() || dtype.isF32() || dtype.isF64() ||
           dtype.isInteger(1) || dtype.isInteger(8) || dtype.isInteger(16) ||
           dtype.isInteger(32) || dtype.isInteger(64))) {
-      op.emitError(
+      llvm::Twine error_info =
           "requires element_dtype to be 1-bit/8-bit/16-bit/32-bit/64-bit "
           "integer or 16-bit/32-bit/64-bit float type during TF Lite "
-          "transformation pass");
-      return failure();
+          "transformation pass";
+      return allow_tensorlist_pass_through_
+                 ? rewriter.notifyMatchFailure(op, error_info)
+                 : op.emitOpError(error_info);
     }
 
     Value element_shape = operands[0];
@@ -393,10 +412,12 @@ struct ConvertTensorListInitOp : public OpConversionPattern<OpT> {
           if (element_shape_acquired) break;
         }
         if (!element_shape_acquired) {
-          op.emitError(
+          llvm::Twine error_info =
               "requires element_shape to be 1D tensor during TF Lite "
-              "transformation pass");
-          return failure();
+              "transformation pass";
+          return allow_tensorlist_pass_through_
+                     ? rewriter.notifyMatchFailure(op, error_info)
+                     : op.emitOpError(error_info);
         }
       }
     }
@@ -484,8 +505,9 @@ struct ConvertTensorListInitOp : public OpConversionPattern<OpT> {
 
 struct ConvertTensorListReserve
     : public ConvertTensorListInitOp<TF::TensorListReserveOp> {
-  explicit ConvertTensorListReserve(MLIRContext *context)
-      : ConvertTensorListInitOp(context) {}
+  explicit ConvertTensorListReserve(MLIRContext *context,
+                                    bool allow_tensorlist_pass_through)
+      : ConvertTensorListInitOp(context, allow_tensorlist_pass_through) {}
 
   Value GetNumElements(TF::TensorListReserveOp op, ArrayRef<Value> operands,
                        PatternRewriter *rewriter) const override {
@@ -507,8 +529,9 @@ struct ConvertTensorListReserve
 // have a different behavior compared to TensorFlow in case of errors.
 struct ConvertEmptyTensorList
     : public ConvertTensorListInitOp<TF::EmptyTensorListOp> {
-  explicit ConvertEmptyTensorList(MLIRContext *context)
-      : ConvertTensorListInitOp(context) {}
+  explicit ConvertEmptyTensorList(MLIRContext *context,
+                                  bool allow_tensorlist_pass_through)
+      : ConvertTensorListInitOp(context, allow_tensorlist_pass_through) {}
 
   Value GetNumElements(TF::EmptyTensorListOp op, ArrayRef<Value> operands,
                        PatternRewriter *rewriter) const override {
@@ -793,7 +816,7 @@ struct ConvertIdentity : public OpConversionPattern<TF::IdentityOp> {
       ConversionPatternRewriter &rewriter) const override {
     Value input = operands[0];
     rewriter.replaceOpWithNewOp<TF::IdentityOp>(op, input.getType(), operands,
-                                                op.getAttrs());
+                                                op->getAttrs());
     return success();
   }
 };
@@ -837,7 +860,8 @@ llvm::SmallSet<int, 4> GetTensorListArgumentsFromWhileOp(TF::WhileOp op) {
 
 // Changes the function type of `cond_func` and `body_func` for the given While
 // op.
-LogicalResult UpdateFunctionTypes(TF::WhileOp op,
+LogicalResult UpdateFunctionTypes(ConversionPatternRewriter &rewriter,
+                                  TF::WhileOp op,
                                   llvm::SmallSet<int, 4> tensor_list_args) {
   int func_index = 0;
   for (FuncOp func : {op.cond_function(), op.body_function()}) {
@@ -883,13 +907,18 @@ LogicalResult UpdateFunctionTypes(TF::WhileOp op,
     // Change `func`'s argument type to `unranked_argument_types`. If it
     // return types contain a `DT_VARIANT`, change it to the unranked type
     // derived from the corresponding argument.
-    func.setType(FunctionType::get(op.getContext(), updated_argument_types,
-                                   updated_result_types));
-
-    // Change the argument type for the first block.
-    llvm::for_each(func.getArguments(), [&](BlockArgument &arg) {
-      arg.setType(updated_argument_types[arg.getArgNumber()]);
+    rewriter.updateRootInPlace(func, [&] {
+      func.setType(FunctionType::get(op.getContext(), updated_argument_types,
+                                     updated_result_types));
     });
+    Region &entry = func.getRegion();
+    TypeConverter::SignatureConversion signature_conversion(
+        entry.getNumArguments());
+    for (auto arg : entry.getArguments()) {
+      signature_conversion.addInputs(
+          arg.getArgNumber(), updated_argument_types[arg.getArgNumber()]);
+    }
+    rewriter.applySignatureConversion(&entry, signature_conversion);
   }
   return success();
 }
@@ -919,9 +948,9 @@ struct ConvertWhile : public OpConversionPattern<TF::WhileOp> {
 
     // Create a new while op with new operands and updated result types.
     auto converted = rewriter.create<TF::WhileOp>(op.getLoc(), result_types,
-                                                  operands, op.getAttrs());
+                                                  operands, op->getAttrs());
     converted.removeAttr("T");
-    UpdateFunctionTypes(converted, tensor_list_args);
+    (void)UpdateFunctionTypes(rewriter, converted, tensor_list_args);
 
     rewriter.replaceOp(op, converted.getResults());
     return success();
@@ -943,7 +972,7 @@ struct ConvertWhileRegion : public OpConversionPattern<TF::WhileRegionOp> {
 
     // Create a new while op with new operands and updated result types.
     auto converted = rewriter.create<TF::WhileRegionOp>(
-        op.getLoc(), result_types, operands, op.getAttrs());
+        op.getLoc(), result_types, operands, op->getAttrs());
 
     // Inline the regions from the old while into the new one, and apply
     // signature conversion to inlined region.
@@ -972,8 +1001,7 @@ struct ConvertWhileRegion : public OpConversionPattern<TF::WhileRegionOp> {
 
 #include "tensorflow/compiler/mlir/lite/transforms/generated_lower_static_tensor_list.inc"
 
-LogicalResult LowerStaticTensorListPass::RewriteFunction(
-    FuncOp func, TensorListPatternRewriter *rewriter) {
+void LowerStaticTensorListPass::runOnOperation() {
   auto *context = &getContext();
 
   // TensorFlow operations that doesn't have operands and results of type
@@ -996,7 +1024,7 @@ LogicalResult LowerStaticTensorListPass::RewriteFunction(
                       TF::TensorListGetItemOp, TF::TensorListLengthOp,
                       TF::TensorListPushBackOp, TF::TensorListReserveOp,
                       TF::TensorListSetItemOp, TF::TensorListStackOp,
-                      TF::TensorListResizeOp>();
+                      TF::TensorListResizeOp, TF::TensorListConcatV2Op>();
   // TODO(hinsu): Use TFLite constant op for constants.
   target.addLegalOp<ConstantOp>();
   target.addLegalOp<FuncOp>();
@@ -1010,35 +1038,27 @@ LogicalResult LowerStaticTensorListPass::RewriteFunction(
 
   OwningRewritePatternList patterns;
   populateWithGenerated(context, patterns);
-  patterns.insert<ConvertConst, ConvertEmptyTensorList, ConvertIdentity,
-                  ConvertTensorListGetItem, ConvertTensorListLength,
-                  ConvertTensorListPushBack, ConvertTensorListReserve,
+  patterns.insert<ConvertConst, ConvertIdentity, ConvertTensorListGetItem,
+                  ConvertTensorListLength, ConvertTensorListPushBack,
                   ConvertTensorListSetItem, ConvertTensorListStack,
                   ConvertTensorListResize, ConvertWhile, ConvertWhileRegion>(
       context);
-  return applyPartialConversion(func, target, std::move(patterns));
-}
-
-void LowerStaticTensorListPass::runOnOperation() {
-  // TODO(haoliang): currently we process the `main` function first, and the
-  // remaining functions may be processed in arbitrary order. However, this will
-  // have a potential issue when one function taking a `DT_VARIANT` is processed
-  // before the function that produces the `DT_VARIANT`. We need to carefully
-  // order the functions to be processed.
-  std::vector<FuncOp> funcs_in_module;
-  for (auto func : getOperation().getOps<FuncOp>()) {
-    // Always place the main function to be the first in the list.
-    if (func.getName() == "main") {
-      funcs_in_module.insert(funcs_in_module.begin(), func);
-    } else {
-      funcs_in_module.push_back(func);
-    }
-  }
-  for (auto func : funcs_in_module) {
-    TensorListPatternRewriter rewriter(func);
-    if (failed(RewriteFunction(func, &rewriter))) {
+  patterns.insert<ConvertEmptyTensorList, ConvertTensorListReserve>(
+      context, allow_tensorlist_pass_through);
+  if (!allow_tensorlist_pass_through) {
+    if (failed(applyPartialConversion(getOperation(), target,
+                                      std::move(patterns)))) {
       signalPassFailure();
-      return;
+    }
+  } else {
+    // If `allow_tensorlist_pass_through` is set to true, if legalization fails
+    // we should not leak the diagnostic info outside this pass. Hence we use
+    // a `StatusScopedDiagnosticHandler` here to capture diagnostics generated
+    // within this pass.
+    StatusScopedDiagnosticHandler handler(context);
+    if (failed(applyPartialConversion(getOperation(), target,
+                                      std::move(patterns)))) {
+      auto _ = handler.ConsumeStatus();
     }
   }
 }
@@ -1047,9 +1067,10 @@ void LowerStaticTensorListPass::runOnOperation() {
 
 /// Creates an instance of the TensorFlow Lite dialect LowerStaticTensorList
 /// pass.
-std::unique_ptr<OperationPass<ModuleOp>>
-TFL::CreateLowerStaticTensorListPass() {
-  return std::make_unique<LowerStaticTensorListPass>();
+std::unique_ptr<OperationPass<ModuleOp>> TFL::CreateLowerStaticTensorListPass(
+    bool allow_tensorlist_pass_through) {
+  return std::make_unique<LowerStaticTensorListPass>(
+      allow_tensorlist_pass_through);
 }
 
 static PassRegistration<LowerStaticTensorListPass> pass(

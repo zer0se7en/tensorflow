@@ -51,6 +51,8 @@ const char* TensorTypeName(TfLiteType type) {
       return "kTfLiteFloat32";
     case kTfLiteInt32:
       return "kTfLiteInt32";
+    case kTfLiteUInt32:
+      return "kTfLiteUInt32";
     case kTfLiteUInt8:
       return "kTfLiteUInt8";
     case kTfLiteInt8:
@@ -73,6 +75,10 @@ const char* TensorTypeName(TfLiteType type) {
       return "kTfLiteFloat16";
     case kTfLiteFloat64:
       return "kTfLiteFloat64";
+    case kTfLiteResource:
+      return "kTfLiteResource";
+    case kTfLiteVariant:
+      return "kTfLiteVariant";
   }
   return "(invalid)";
 }

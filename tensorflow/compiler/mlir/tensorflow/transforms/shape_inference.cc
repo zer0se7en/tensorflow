@@ -15,6 +15,7 @@ limitations under the License.
 
 #include "tensorflow/compiler/mlir/tensorflow/transforms/shape_inference.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <iterator>
@@ -41,6 +42,7 @@ limitations under the License.
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/OperationSupport.h"  // from @llvm-project
 #include "mlir/IR/SymbolTable.h"  // from @llvm-project
+#include "mlir/IR/TypeUtilities.h"  // from @llvm-project
 #include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Interfaces/CallInterfaces.h"  // from @llvm-project
 #include "mlir/Interfaces/FoldInterfaces.h"  // from @llvm-project
@@ -115,7 +117,8 @@ bool IsSupportedNonTFOp(Operation* op) {
              tf_executor::GraphOp, tf_executor::IslandOp,
              tf_executor::LoopCondOp, tf_executor::MergeOp,
              tf_executor::NextIterationSinkOp, tf_executor::SwitchNOp,
-             tf_executor::SwitchOp, tf_executor::YieldOp>(op);
+             tf_executor::SwitchOp, tf_executor::YieldOp>(op) ||
+         isa<InferTypeOpInterface>(op);
 }
 
 // Returns whether a cast back would need to be inserted, e.g., whether the
@@ -169,110 +172,124 @@ RankedTensorType DropFirstDimension(Type type) {
 bool CanInferTensorListElementType(Value tensorlist,
                                    Value initial_element_shape,
                                    RankedTensorType* potential_element_type) {
+  DCOMMENT("CanInferTensorListElementType " << tensorlist << " with initial "
+                                            << initial_element_shape);
   // Verifies if the new element type has static shape and matches the potential
   // type passed from caller. Updates the potential_element_type, if not defined
   // yet.
   auto verify_and_update_potential_element_type =
       [&](RankedTensorType new_element_type) -> bool {
+    DCOMMENT("\t\tConsidering " << new_element_type << " with old "
+                                << *potential_element_type);
     if (!new_element_type || !new_element_type.hasStaticShape()) return false;
     if (!*potential_element_type) {
+      DCOMMENT("\t\tUpdating potential_element_type " << new_element_type);
       *potential_element_type = new_element_type;
       return true;
     }
     return *potential_element_type == new_element_type;
   };
 
-  // TensorLists are semantically immutable. For example, TensorListSetItem
-  // takes a TensorList as input and produces a TensorList as output. So to
-  // traverse modifications to TensorList and verify that all elements written
-  // to it have the same shape, we need to follow use-def chain of ops that
-  // (conceptually) modify it i.e., ops that take an input TensorList and
-  // produce an output TensorList.
-  for (auto& use : tensorlist.getUses()) {
-    if (auto push = llvm::dyn_cast<TensorListPushBackOp>(use.getOwner())) {
-      auto element_type = push.tensor().getType().dyn_cast<RankedTensorType>();
-      if (!verify_and_update_potential_element_type(element_type)) return false;
-      if (!CanInferTensorListElementType(push.output_handle(),
-                                         initial_element_shape,
-                                         potential_element_type))
-        return false;
-      continue;
-    }
-    if (auto scatter = llvm::dyn_cast<TensorListScatterIntoExistingListOp>(
-            use.getOwner())) {
-      // For scatter op we can get the element shape by dropping the first
-      // dimension of the input tensor.
-      RankedTensorType element_type =
-          DropFirstDimension(scatter.tensor().getType());
-      if (!verify_and_update_potential_element_type(element_type)) return false;
-      if (!CanInferTensorListElementType(scatter.output_handle(),
-                                         initial_element_shape,
-                                         potential_element_type))
-        return false;
-      continue;
-    }
-    if (auto set_item = llvm::dyn_cast<TensorListSetItemOp>(use.getOwner())) {
-      auto element_type =
-          set_item.item().getType().dyn_cast<RankedTensorType>();
-      if (!verify_and_update_potential_element_type(element_type)) return false;
-      if (!CanInferTensorListElementType(set_item.output_handle(),
-                                         initial_element_shape,
-                                         potential_element_type))
-        return false;
-      continue;
-    }
-    if (auto pop = llvm::dyn_cast<TensorListPopBackOp>(use.getOwner())) {
-      if (!CanInferTensorListElementType(pop.output_handle(),
-                                         initial_element_shape,
-                                         potential_element_type))
-        return false;
-      continue;
-    }
-    if (auto resize = llvm::dyn_cast<TensorListResizeOp>(use.getOwner())) {
-      if (!CanInferTensorListElementType(resize.output_handle(),
-                                         initial_element_shape,
-                                         potential_element_type))
-        return false;
-      continue;
-    }
-    // WhileRegionOp can explicitly capture TensorList value to be used inside
-    // its regions. So we check the uses of corresponding block argument in each
-    // region and the use of TensorList returned using YieldOp.
-    if (auto while_region = llvm::dyn_cast<WhileRegionOp>(use.getOwner())) {
-      for (auto branch : while_region.getRegions()) {
-        if (!CanInferTensorListElementType(
-                branch->getArgument(use.getOperandNumber()),
-                initial_element_shape, potential_element_type))
-          return false;
-      }
-      continue;
-    }
-    if (auto yield = llvm::dyn_cast<YieldOp>(use.getOwner())) {
-      Operation* parent = yield->getParentOp();
-      if (!CanInferTensorListElementType(
-              parent->getResult(use.getOperandNumber()), initial_element_shape,
-              potential_element_type))
-        return false;
-      continue;
-    }
-    // Refining the tensor list element type might change the output of
-    // TensorListElementShape which is expected tp be the originally assigned
-    // shape to TensorList init ops. So replace it with the original element
-    // shape value.
-    if (auto tl_element_shape =
-            dyn_cast<TensorListElementShapeOp>(use.getOwner())) {
-      tl_element_shape.replaceAllUsesWith(initial_element_shape);
-      continue;
-    }
-    // Ignore ops that just consume a TensorList and do not output another
-    // TensorList.
-    if (isa<TensorListStackOp, TensorListGatherOp, TensorListConcatV2Op,
-            TensorListLengthOp, TensorListGetItemOp>(use.getOwner()))
-      continue;
+  std::stack<Value> worklist;
+  worklist.emplace(tensorlist);
 
-    // For any other unknown users of the TensorList, we are conservative and
-    // stop element shape inference.
-    return false;
+  while (!worklist.empty()) {
+    tensorlist = worklist.top();
+    worklist.pop();
+
+    // TensorLists are semantically immutable. For example, TensorListSetItem
+    // takes a TensorList as input and produces a TensorList as output. So to
+    // traverse modifications to TensorList and verify that all elements written
+    // to it have the same shape, we need to follow use-def chain of ops that
+    // (conceptually) modify it i.e., ops that take an input TensorList and
+    // produce an output TensorList.
+    for (auto& use : tensorlist.getUses()) {
+      if (auto push = llvm::dyn_cast<TensorListPushBackOp>(use.getOwner())) {
+        auto element_type =
+            push.tensor().getType().dyn_cast<RankedTensorType>();
+        if (!verify_and_update_potential_element_type(element_type))
+          return false;
+        worklist.emplace(push.output_handle());
+        continue;
+      }
+      if (auto scatter = llvm::dyn_cast<TensorListScatterIntoExistingListOp>(
+              use.getOwner())) {
+        // For scatter op we can get the element shape by dropping the first
+        // dimension of the input tensor.
+        RankedTensorType element_type =
+            DropFirstDimension(scatter.tensor().getType());
+        if (!verify_and_update_potential_element_type(element_type))
+          return false;
+        worklist.emplace(scatter.output_handle());
+        continue;
+      }
+      if (auto set_item = llvm::dyn_cast<TensorListSetItemOp>(use.getOwner())) {
+        auto element_type =
+            set_item.item().getType().dyn_cast<RankedTensorType>();
+        DCOMMENT("\tTensorListSetItemOp " << element_type);
+        if (!verify_and_update_potential_element_type(element_type))
+          return false;
+        worklist.emplace(set_item.output_handle());
+        continue;
+      }
+      if (auto pop = llvm::dyn_cast<TensorListPopBackOp>(use.getOwner())) {
+        worklist.emplace(pop.output_handle());
+        continue;
+      }
+      if (auto resize = llvm::dyn_cast<TensorListResizeOp>(use.getOwner())) {
+        worklist.emplace(resize.output_handle());
+        continue;
+      }
+      // WhileRegionOp can explicitly capture TensorList value to be used inside
+      // its regions. So we check the uses of corresponding block argument in
+      // each region and the use of TensorList returned using YieldOp.
+      if (auto while_region = llvm::dyn_cast<WhileRegionOp>(use.getOwner())) {
+        DCOMMENT("\tTL WhileRegion");
+        for (auto branch : while_region.getRegions())
+          worklist.emplace(branch->getArgument(use.getOperandNumber()));
+        continue;
+      }
+      if (auto yield = llvm::dyn_cast<YieldOp>(use.getOwner())) {
+        Operation* parent = yield->getParentOp();
+        worklist.emplace(parent->getResult(use.getOperandNumber()));
+        continue;
+      }
+      // TODO(jpienaar): This can be generalized.
+      if (isa<IdentityOp, IdentityNOp, StopGradientOp>(use.getOwner())) {
+        worklist.emplace(use.getOwner()->getResult(use.getOperandNumber()));
+        continue;
+      }
+      // Refining the tensor list element type might change the output of
+      // TensorListElementShape which is expected to be the originally assigned
+      // shape to TensorList init ops. So replace it with the original element
+      // shape value.
+      if (auto tl_element_shape =
+              dyn_cast<TensorListElementShapeOp>(use.getOwner())) {
+        // If element types match, we can do a direct replacement.
+        if (getElementTypeOrSelf(tl_element_shape.getResult()) ==
+            getElementTypeOrSelf(initial_element_shape.getType())) {
+          tl_element_shape.replaceAllUsesWith(initial_element_shape);
+        } else {
+          OpBuilder b(use.getOwner());
+          auto cast_op = b.create<TF::CastOp>(
+              use.getOwner()->getLoc(), tl_element_shape.getResult().getType(),
+              initial_element_shape,
+              /*truncate=*/b.getBoolAttr(false));
+          tl_element_shape.replaceAllUsesWith(cast_op.getResult());
+        }
+        continue;
+      }
+      // Ignore ops that just consume a TensorList and do not output another
+      // TensorList.
+      if (isa<TensorListStackOp, TensorListGatherOp, TensorListConcatV2Op,
+              TensorListLengthOp, TensorListGetItemOp>(use.getOwner()))
+        continue;
+
+      // For any other unknown users of the TensorList, we are conservative and
+      // stop element shape inference.
+      DCOMMENT("TensorListType infer, unknown op " << *use.getOwner());
+      return false;
+    }
   }
   return true;
 }
@@ -462,12 +479,14 @@ class ShapeInference {
   LogicalResult InferShapeUntilFixPoint(Region* region, int64_t max_iterations);
 
   // Updates input types and refine shapes inside body of functions that are
-  // attached to ControlFlow ops (If/While). These functions include Then/Else
-  // branches of IfOp and Cond/Body functions of WhileOp. These functions share
-  // following common properties:
+  // attached to ControlFlow ops (If/While) or Calls. These functions include
+  // Then/Else branches of IfOp and Cond/Body functions of WhileOp. Functions
+  // attached to control flow share following common properties:
   //   1) They are never reused, ie. having a single use in module.
   //   2) Their input types match those of their parent ops (excluding inputs
   //      like predicate).
+  // For calls, functions can be reused across multiple call sites. In this case
+  // we propagate the types when all call sites have the same operand types.
   LogicalResult PropagateShapeToFunctions(ModuleOp module,
                                           TypeRange input_types,
                                           ArrayRef<FuncOp> functions,
@@ -590,7 +609,7 @@ class ShapeInference {
   // with insertions to the callers map. This could occur if GetCallers is
   // called with two separate functions, the 2nd one incurs a resize and then
   // both first and 2nd stored callers are used.
-  ArrayRef<FuncOp> GetCallers(FuncOp fn);
+  ArrayRef<Operation*> GetCallers(FuncOp fn);
 
   // Mapping between ValuePort (which corresponds to an OpResult or smaller,
   // e.g., first element of OpResult produced) to an Attribute if the ValuePort
@@ -598,7 +617,7 @@ class ShapeInference {
   ValuePortResultMap results_;
 
   // Map from a function to the callers of that function.
-  llvm::DenseMap<FuncOp, SmallVector<FuncOp, 4>> callers_of_func_;
+  llvm::DenseMap<FuncOp, SmallVector<Operation*, 4>> callers_of_func_;
 
   // Queue of functions being processed.
   llvm::DenseSet<FuncOp> queue_set_;
@@ -617,7 +636,7 @@ ShapeInference::ShapeInference(int64_t graph_version, MLIRContext* context,
       graph_version_(graph_version),
       propagate_caller_callee_constants_(propagate_caller_callee_constants) {}
 
-ArrayRef<FuncOp> ShapeInference::GetCallers(FuncOp fn) {
+ArrayRef<Operation*> ShapeInference::GetCallers(FuncOp fn) {
   auto pair = callers_of_func_.try_emplace(fn);
   if (pair.second) {
     ModuleOp module = fn->getParentOfType<ModuleOp>();
@@ -625,7 +644,7 @@ ArrayRef<FuncOp> ShapeInference::GetCallers(FuncOp fn) {
     if (uses) {
       pair.first->second.reserve(pair.first->second.size());
       for (auto use : *uses) {
-        pair.first->second.push_back(use.getUser()->getParentOfType<FuncOp>());
+        pair.first->second.push_back(use.getUser());
       }
     }
   }
@@ -633,7 +652,7 @@ ArrayRef<FuncOp> ShapeInference::GetCallers(FuncOp fn) {
 }
 
 void ShapeInference::EnqueueCallers(FuncOp fn) {
-  for (auto user : GetCallers(fn)) enqueue(user);
+  for (auto user : GetCallers(fn)) enqueue(user->getParentOfType<FuncOp>());
 }
 
 void ShapeInference::UpdateTypeAndInsertIncompatibleUseCasts(Type new_type,
@@ -762,8 +781,12 @@ bool ShapeInference::InferShapeForTensorListInitOps(Operation* op) {
     if (!element_type || !element_type.hasStaticShape()) return false;
   }
   if (!CanInferTensorListElementType(handle, initial_element_shape,
-                                     &element_type))
+                                     &element_type)) {
+    DCOMMENT("InferShapeForListInitOps " << op << " could not infer");
     return false;
+  }
+  DCOMMENT("InferShapeForListInitOps " << op << " could be inferred "
+                                       << element_type);
   if (!element_type || !element_type.hasStaticShape()) return false;
   auto variant_type = VariantType::get(element_type, op->getContext());
   auto tensor_type = RankedTensorType::get({}, variant_type);
@@ -867,7 +890,7 @@ bool ShapeInference::RefineTypeForPassThroughOperands(Operation* op,
                                                       OperandRange operands,
                                                       ResultRange results) {
   bool changed = false;
-  for (auto entry : zip(operands, results)) {
+  for (auto entry : llvm::zip(operands, results)) {
     Type operand_type = std::get<0>(entry).getType();
     Value result = std::get<1>(entry);
     TensorType result_type = result.getType().cast<TensorType>();
@@ -902,7 +925,7 @@ bool ShapeInference::RefineShapeForPassThroughOps(Operation* op) {
   };
 
   bool changed = false;
-  for (auto entry : zip(op->getOperands(), op->getResults())) {
+  for (auto entry : llvm::zip(op->getOperands(), op->getResults())) {
     TensorType operand_type = std::get<0>(entry).getType().cast<TensorType>();
     Value result = std::get<1>(entry);
     TensorType result_type = result.getType().cast<TensorType>();
@@ -1033,7 +1056,8 @@ bool ShapeInference::InferShapeForSingleOperation(Operation* op) {
   // The shape function of these ops sometimes does not propagate subtypes
   // (handle shapes) for resource and variant types. We use a simple passthrough
   // to make sure they are preserved in the output.
-  if (isa<TF::IdentityOp, TF::IdentityNOp, TF::ZerosLikeOp>(op)) {
+  if (isa<TF::IdentityOp, TF::IdentityNOp, TF::StopGradientOp, TF::ZerosLikeOp>(
+          op)) {
     return RefineTypeForPassThroughOperands(op, op->getOperands(),
                                             op->getResults());
   }
@@ -1141,16 +1165,28 @@ LogicalResult ShapeInference::PropagateShapeToFunctions(
   // have a best-effort propagation.
   for (FuncOp func : functions) {
     DCOMMENT("Propating shape to" << func.getName());
-    auto func_uses = GetCallers(func);
-    if (!llvm::hasSingleElement(func_uses)) {
-      func.emitWarning(
-          formatv("expected control flow function @{0} to have exactly 1 use, "
-                  "found {1}.",
-                  func.getName(), func_uses.size()));
+    ArrayRef<Operation*> callers = GetCallers(func);
+    if (!llvm::hasSingleElement(callers) &&
+        !llvm::all_of(callers.drop_front(), [&](Operation* caller) {
+          /// TODO(aminim): this is overly conservative as some operations
+          /// (like TPUPartitionedCallOp) may have extra operands that aren't
+          /// propagated to the callee.
+          return isa<CallOpInterface>(caller) &&
+                 std::equal(caller->getOperandTypes().begin(),
+                            caller->getOperandTypes().end(),
+                            callers.front()->getOperandTypes().begin());
+        })) {
       all_succeeded = false;
+      if (llvm::any_of(callers, [](Operation* op) {
+            return isa<IfOp, WhileOp, CaseOp>(op);
+          }))
+        func.emitWarning(formatv(
+            "expected control flow function @{0} to have exactly 1 use, "
+            "found {1}.",
+            func.getName(), callers.size()));
+
       continue;
     }
-
     FunctionType func_type = func.getType();
     func.setType(FunctionType::get(func.getContext(), input_types,
                                    func_type.getResults()));
@@ -1194,8 +1230,8 @@ LogicalResult ShapeInference::PropagateShapeToRegions(TypeRange input_types,
 
 void ShapeInference::PropagateConstantToCallee(CallOpInterface call_op,
                                                FuncOp func, ModuleOp module) {
-  auto func_uses = GetCallers(func);
-  if (!llvm::hasSingleElement(func_uses)) return;
+  auto callers = GetCallers(func);
+  if (!llvm::hasSingleElement(callers)) return;
 
   OpBuilder builder(&func.front().front());
   Operation* op = call_op.getOperation();
@@ -1418,8 +1454,13 @@ LogicalResult ShapeInference::TryToFold(Operation* op) {
       RecordValue(ValuePort(std::get<0>(result)), attr);
     } else {
       auto value = fold_result.get<Value>();
-      if ((attr = ComputeOutputComponent(ValuePort(value))))
+      if ((attr = ComputeOutputComponent(ValuePort(value)))) {
+        DCOMMENT("\t\tValue Result mapped to " << attr);
         RecordValue(ValuePort(std::get<0>(result)), attr);
+      } else {
+        DCOMMENT("\t\tValue result unmapped, consider value type:" << value);
+        RefineResultType(op, std::get<0>(result), value.getType());
+      }
     }
 
     if (ElementsAttr eattr = attr.dyn_cast_or_null<ElementsAttr>()) {
@@ -1529,7 +1570,11 @@ LogicalResult ShapeInference::InferShapeUntilFixPoint(Region* region,
 
       // Before attempting inference, just try to compute the folded
       // value/shape.
-      if (succeeded(TryToFold(op))) return;
+      if (succeeded(TryToFold(op)) &&
+          // Folding can "succeed" and yet not all types be refined. In such
+          // cases we still want to give a try at `InferShapeForSingleOperation`
+          none_of(op->getResultTypes(), CanBeRefined))
+        return;
 
       // Best-effort shape inference in attached functions. Do not return
       // failure even if it doesn't get to fixed point.
@@ -1629,8 +1674,8 @@ LogicalResult InferModuleShape(ModuleOp module, int64_t max_iterations) {
     return success();
   }
   int64_t producer = producer_or.ValueOrDie();
-  // TODO(jpienaar): Clean up propagate_caller_callee_constants if it is no
-  // longer needed.
+  // TODO(jpienaar): Clean up propagate_NextIterationSinkOp_callee_constants if
+  // it is no longer needed.
   ShapeInference context(producer, module.getContext(),
                          /*propagate_caller_callee_constants=*/false);
   if (auto main = module.lookupSymbol<mlir::FuncOp>("main"))
@@ -1641,8 +1686,8 @@ LogicalResult InferModuleShape(ModuleOp module, int64_t max_iterations) {
   auto max_iteration = context.QueueSize() * 4;
   while (!context.EmptyQueue()) {
     FuncOp func = context.front();
-    auto res = InferShapeForFunction(context, func, max_iterations);
-    if (failed(res)) return res;
+    if (failed(InferShapeForFunction(context, func, max_iterations)))
+      return failure();
     context.pop_front();
 
     if ((--max_iteration) == 0) {

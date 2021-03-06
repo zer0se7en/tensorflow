@@ -62,9 +62,6 @@ def tflite_copts_warnings():
         ],
         "//conditions:default": [
             "-Wall",
-            # TensorFlow is C++14 at the moment. This flag ensures that we warn
-            # on any code that isn't C++14. Not supported by MSVC.
-            "-Wc++14-compat",
         ],
     })
 
@@ -85,6 +82,7 @@ def tflite_linkopts_unstripped():
     # negligible, and created potential compatibility problems.
     return select({
         clean_dep("//tensorflow:android"): [
+            "-latomic",  # Required for some uses of ISO C++11 <atomic> in x86.
             "-Wl,--no-export-dynamic",  # Only inc syms referenced by dynamic obj.
             "-Wl,--gc-sections",  # Eliminate unused code and data.
             "-Wl,--as-needed",  # Don't link unused libs.
@@ -106,6 +104,7 @@ def tflite_jni_linkopts_unstripped():
     # negligible, and created potential compatibility problems.
     return select({
         clean_dep("//tensorflow:android"): [
+            "-latomic",  # Required for some uses of ISO C++11 <atomic> in x86.
             "-Wl,--gc-sections",  # Eliminate unused code and data.
             "-Wl,--as-needed",  # Don't link unused libs.
         ],
@@ -115,11 +114,6 @@ def tflite_jni_linkopts_unstripped():
 def tflite_symbol_opts():
     """Defines linker flags whether to include symbols or not."""
     return select({
-        clean_dep("//tensorflow:android"): [
-            "-latomic",  # Required for some uses of ISO C++11 <atomic> in x86.
-        ],
-        "//conditions:default": [],
-    }) + select({
         clean_dep("//tensorflow:debug"): [],
         "//conditions:default": [
             "-s",  # Omit symbol table, for all non debug builds
@@ -490,6 +484,11 @@ def common_test_tags_for_generated_models(conversion_mode, failing):
     """
     tags = []
 
+    # Forward-compat coverage testing is largely redundant, and contributes
+    # to coverage test bloat.
+    if conversion_mode == "forward-compat":
+        tags.append("nozapfhahn")
+
     if failing:
         return ["notap", "manual"]
 
@@ -854,7 +853,9 @@ def tflite_custom_android_library(
         srcs = [],
         deps = [],
         custom_package = "org.tensorflow.lite",
-        visibility = ["//visibility:private"]):
+        visibility = ["//visibility:private"],
+        include_xnnpack_delegate = True,
+        include_nnapi_delegate = True):
     """Generates a tflite Android library, stripping off unused operators.
 
     Note that due to a limitation in the JNI Java wrapper, the compiled TfLite shared binary
@@ -871,8 +872,16 @@ def tflite_custom_android_library(
         custom_package: Name of the Java package. It is required by android_library in case
             the Java source file can't be inferred from the directory where this rule is used.
         visibility: Visibility setting for the generated target. Default to private.
+        include_xnnpack_delegate: Whether to include the XNNPACK delegate or not.
+        include_nnapi_delegate: Whether to include the NNAPI delegate or not.
     """
     tflite_custom_cc_library(name = "%s_cc" % name, models = models, srcs = srcs, deps = deps, visibility = visibility)
+
+    delegate_deps = []
+    if include_nnapi_delegate:
+        delegate_deps.append("//tensorflow/lite/delegates/nnapi/java/src/main/native")
+    if include_xnnpack_delegate:
+        delegate_deps.append("//tensorflow/lite/delegates/xnnpack:xnnpack_delegate")
 
     # JNI wrapper expects a binary file called `libtensorflowlite_jni.so` in java path.
     tflite_jni_binary(
@@ -882,7 +891,7 @@ def tflite_custom_android_library(
         deps = [
             "//tensorflow/lite/java/src/main/native:native_framework_only",
             ":%s_cc" % name,
-        ],
+        ] + delegate_deps,
     )
 
     native.cc_library(
@@ -893,10 +902,10 @@ def tflite_custom_android_library(
 
     android_library(
         name = name,
+        srcs = ["//tensorflow/lite/java:java_srcs"],
         manifest = "//tensorflow/lite/java:AndroidManifest.xml",
         deps = [
             ":%s_jni" % name,
-            "//tensorflow/lite/java:tensorflowlite_java",
             "@org_checkerframework_qual",
         ],
         custom_package = custom_package,

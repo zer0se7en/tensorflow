@@ -61,7 +61,7 @@ def HLO_ConstOp : HLO_Op<"constant",
   );
 
   let builders = [
-    OpBuilderDAG<(ins "Attribute":$value)>];
+    OpBuilder<(ins "Attribute":$value)>];
 
   let assemblyFormat = "attr-dict $value";
 
@@ -160,9 +160,10 @@ def HLO_CeilOp: HLO_UnaryElementwiseOp<"ceil",
     [NoSideEffect, SameOperandsAndResultType], HLO_FpTensor>, BASE_HLO_CeilOp;
 
 def HLO_ConvertOp : HLO_UnaryElementwiseOp<"convert",
-    [NoSideEffect], HLO_Tensor>, BASE_HLO_ConvertOp {
+    [NoSideEffect, SameOperandsAndResultShape], HLO_Tensor>,
+    BASE_HLO_ConvertOp {
   let builders = [
-    OpBuilderDAG<(ins "Value":$operand, "Type":$result_element_ty)>];
+    OpBuilder<(ins "Value":$operand, "Type":$result_element_ty)>];
 
   let hasFolder = 1;
 
@@ -195,8 +196,8 @@ def HLO_ImagOp: HLO_UnaryElementwiseOp<"imag",
   let hasFolder = 1;
 }
 
-def HLO_IsFiniteOp: HLO_UnaryElementwiseOp<"is_finite",
-    [NoSideEffect], HLO_Tensor>,
+def HLO_IsFiniteOp: HLO_UnaryElementwiseOp<"is_finite", [NoSideEffect,
+    DeclareOpInterfaceMethods<InferTypeOpInterface>], HLO_Tensor>,
     BASE_HLO_IsFiniteOp {
   let arguments = (ins HLO_FpTensor:$x);
   let results = (outs HLO_PredTensor:$y);
@@ -400,12 +401,18 @@ def HLO_InfeedOp : HLO_Op<"infeed", []> {
     of the data. Multiple Infeed operations are allowed in a computation, but
     there must be a total order among the Infeed operations.
 
+    Attributes:
+      layout:  Array attribute. Same shape as the output of the infeed, except
+               that every tensor is replaced by a minor_to_major array for the
+               tensor's layout.
+
     See https://www.tensorflow.org/xla/operation_semantics#infeed.
   }];
 
   let arguments = (ins
     HLO_Token:$token,
-    DefaultValuedAttr<StrAttr, "">:$infeed_config
+    DefaultValuedAttr<StrAttr, "">:$infeed_config,
+    OptionalAttr<ArrayAttr>:$layout
   );
   let results = (outs HLO_Tuple);
   let hasCustomHLOConverter = 1;
@@ -617,7 +624,7 @@ def HLO_ReduceOp: HLO_Op<"reduce", [
   let results = (outs Variadic<HLO_TensorOrTuple>);
 
   let builders = [
-    OpBuilderDAG<(ins "ValueRange":$operands, "ValueRange":$init_values,
+    OpBuilder<(ins "ValueRange":$operands, "ValueRange":$init_values,
       "DenseIntElementsAttr":$dimensions)>];
 
   let extraClassDeclaration = [{
@@ -655,7 +662,7 @@ def HLO_GetTupleElementOp: HLO_Op<"get_tuple_element", [NoSideEffect]>, BASE_HLO
   let hasFolder = 1;
 
   let builders = [
-    OpBuilderDAG<(ins "Value":$value, "int32_t":$index)>];
+    OpBuilder<(ins "Value":$value, "int32_t":$index)>];
 }
 
 def HLO_TupleOp : HLO_Op<"tuple", [NoSideEffect]>, BASE_HLO_TupleOp {
@@ -663,7 +670,7 @@ def HLO_TupleOp : HLO_Op<"tuple", [NoSideEffect]>, BASE_HLO_TupleOp {
   let results = (outs HLO_Tuple);
 
   let builders = [
-    OpBuilderDAG<(ins "ValueRange":$values)>];
+    OpBuilder<(ins "ValueRange":$values)>];
 
   let hasCanonicalizer = 1;
 }
@@ -683,7 +690,7 @@ def HLO_CompareOp: HLO_Op<"compare", [NoSideEffect, SameTypeOperands,
   let hasFolder = 1;
 
   let builders = [
-    OpBuilderDAG<(ins "Value":$lhs, "Value":$rhs,
+    OpBuilder<(ins "Value":$lhs, "Value":$rhs,
       "StringAttr":$comparison_direction, CArg<"StringAttr", "{}">:$compare_type)>,
   ];
 
@@ -881,6 +888,11 @@ def HLO_ConcatenateOp : HLO_Op<"concatenate",
   let hasCanonicalizer = 1;
   let hasFolder = 1;
 
+  let extraClassDeclaration = [{
+    static bool isCompatibleReturnTypes(TypeRange l, TypeRange r) {
+      return succeeded(mlir::verifyCompatibleShapes(l, r));
+    }
+  }];
 }
 
 def HLO_CollectivePermuteOp: HLO_Op<"collective_permute",
@@ -953,6 +965,9 @@ def HLO_DotGeneralOp: HLO_Op<"dot_general", [NoSideEffect]>,
 
   let results = (outs HLO_Tensor);
   let verifier = [{ return Verify(*this); }];
+  // DotGeneral op required custom exporter to pass the preferred element type
+  // to Xla builder.
+  let hasCustomHLOConverter = 1;
 }
 
 // Define Base Einsum op within the HLO dialect as these are client ops and
@@ -1155,7 +1170,7 @@ def HLO_SortOp : HLO_Op<"sort", [RecursiveSideEffects,
   let regions = (region SizedRegion<1>:$comparator);
 
   let builders = [
-    OpBuilderDAG<(ins "ValueRange":$operands, CArg<"int64_t", "-1">:$dimension,
+    OpBuilder<(ins "ValueRange":$operands, CArg<"int64_t", "-1">:$dimension,
       CArg<"bool", "false">:$is_stable)>];
 
   // TODO(b/129422361): SortOp has special conversion logic to HLO.

@@ -66,6 +66,7 @@ py_library(
         ":dense_features",
         "//tensorflow/python:framework_ops",
         "//tensorflow/python/feature_column:feature_column_v2",
+        "//tensorflow/python/keras/utils:tf_contextlib",
         "//tensorflow/python/util:tf_export",
     ],
 )
@@ -167,6 +168,7 @@ tf_py_test(
     deps = [
         ":dense_features",
         ":sequence_feature_column",
+        "//tensorflow/python:array_ops",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_test_lib",
         "//tensorflow/python:init_ops_v2",
@@ -177,6 +179,8 @@ tf_py_test(
         "//tensorflow/python/data/ops:dataset_ops",
         "//tensorflow/python/feature_column:feature_column_v2",
         "//tensorflow/python/keras:metrics",  # Import it here since base_layer didn't import it due to circular dependency.
+        "//tensorflow/python/keras/layers:core",
+        "//tensorflow/python/keras/layers:merge",
         "//tensorflow/python/keras/layers:recurrent",
     ],
 )
