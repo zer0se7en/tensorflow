@@ -18,6 +18,7 @@ limitations under the License.
 #include <vector>
 
 #include "absl/strings/match.h"
+#include "absl/types/span.h"
 #include "tensorflow/compiler/xla/client/client_library.h"
 #include "tensorflow/compiler/xla/client/global_data.h"
 #include "tensorflow/compiler/xla/client/lib/arithmetic.h"
@@ -153,6 +154,20 @@ TEST_F(DynamismInferenceTest, ReduceUsedTwice) {
   EXPECT_EQ(ComputeDynamismScalar(result, &b, {}).ValueOrDie(), true);
 }
 
+TEST_F(DynamismInferenceTest, DynamicSelectorWithMixedValues) {
+  XlaBuilder b(TestName());
+  auto constant_pred = ConstantR1<bool>(&b, {true});
+  auto dynamic_pred = Parameter(&b, 0, ShapeUtil::MakeShape(PRED, {1}), "p0");
+  auto concat = ConcatInDim(&b, {constant_pred, dynamic_pred}, 0);
+  auto constant_values = ConstantR1<bool>(&b, {true, true});
+  auto result = Select(concat, constant_values, constant_values);
+  // First result is static (selector is constant, both values are constant).
+  // Iota is not dynamic.
+  EXPECT_FALSE(ComputeDynamismLiteral(result, &b).ValueOrDie().Get<bool>({0}));
+  // Second result is dynamic (selector is dynamic).
+  EXPECT_TRUE(ComputeDynamismLiteral(result, &b).ValueOrDie().Get<bool>({1}));
+}
+
 TEST_F(DynamismInferenceTest, ConcatSliceReshapeKeepsDynamism) {
   XlaBuilder b(TestName());
   auto c = ConstantR0<int32>(&b, 42);
@@ -188,6 +203,18 @@ TEST_F(DynamismInferenceTest, UnaryOpKeepsDynamism) {
   auto tuple_2 = Tuple(&b, {neg0, neg1});
   EXPECT_EQ(ComputeDynamismScalar(tuple_2, &b, {0}).ValueOrDie(), false);
   EXPECT_EQ(ComputeDynamismScalar(tuple_2, &b, {1}).ValueOrDie(), true);
+}
+
+TEST_F(DynamismInferenceTest, ParameterWithToken) {
+  // Test that token shape can be handled in a parameter.
+  XlaBuilder b(TestName());
+  auto p =
+      Parameter(&b, 0,
+                ShapeUtil::MakeTupleShape({ShapeUtil::MakeTokenShape(),
+                                           ShapeUtil::MakeScalarShape(S32)}),
+                "p0");
+  EXPECT_EQ(ComputeDynamismScalar(p, &b, {0}).ValueOrDie(), true);
+  EXPECT_EQ(ComputeDynamismScalar(p, &b, {1}).ValueOrDie(), true);
 }
 
 TEST_F(DynamismInferenceTest, BinaryOpsOrsDynamism) {
