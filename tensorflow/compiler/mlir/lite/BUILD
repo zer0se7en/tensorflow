@@ -5,10 +5,9 @@ load("//tensorflow:tensorflow.bzl", "filegroup")
 load("//tensorflow:tensorflow.bzl", "get_compatible_with_cloud")
 load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load("//tensorflow:tensorflow.bzl", "tf_cc_binary", "tf_cc_test", "tf_native_cc_binary")
-load("//tensorflow/lite:special_rules.bzl", "internal_visibility_allowlist")
 load(
     "//third_party/mlir:tblgen.bzl",
-    "gentbl",
+    "gentbl_cc_library",
 )
 
 package(
@@ -26,8 +25,10 @@ package_group(
     packages = [
         "//learning/brain/experimental/mlir/tflite/tfmrt/...",
         "//learning/brain/mlir/...",
-        "//tensorflow/compiler/mlir/...",
         "//third_party/iree/...",
+        "//tensorflow/compiler/mlir/...",
+        # Allow visibility from the mlir language server.
+        "//learning/brain/mlir/mlir_lsp_server/...",
     ],
 )
 
@@ -46,20 +47,20 @@ filegroup(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_ops_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-op-decls",
+            ["-gen-op-decls"],
             "ir/tfl_ops.h.inc",
         ),
         (
-            "-gen-op-defs",
+            ["-gen-op-defs"],
             "ir/tfl_ops.cc.inc",
         ),
         (
-            "-gen-dialect-doc",
+            ["-gen-dialect-doc"],
             "g3doc/tfl_ops.md",
         ),
     ],
@@ -70,16 +71,16 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_structs_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-struct-attr-decls",
+            ["-gen-struct-attr-decls"],
             "ir/tfl_structs.h.inc",
         ),
         (
-            "-gen-struct-attr-defs",
+            ["-gen-struct-attr-defs"],
             "ir/tfl_structs.cc.inc",
         ),
     ],
@@ -90,16 +91,16 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_op_interfaces_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-op-interface-decls",
+            ["-gen-op-interface-decls"],
             "ir/tfl_ops_interface.h.inc",
         ),
         (
-            "-gen-op-interface-defs",
+            ["-gen-op-interface-defs"],
             "ir/tfl_ops_interface.cc.inc",
         ),
     ],
@@ -110,12 +111,12 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_prepare_tf_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-rewriters",
+            ["-gen-rewriters"],
             "transforms/generated_prepare_tf.inc",
         ),
     ],
@@ -129,12 +130,12 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_lower_static_tensor_list_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-rewriters",
+            ["-gen-rewriters"],
             "transforms/generated_lower_static_tensor_list.inc",
         ),
     ],
@@ -147,12 +148,12 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_legalize_tf_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-rewriters",
+            ["-gen-rewriters"],
             "transforms/generated_legalize_tf.inc",
         ),
     ],
@@ -165,12 +166,12 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_optimize_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-rewriters",
+            ["-gen-rewriters"],
             "transforms/generated_optimize.inc",
         ),
     ],
@@ -184,12 +185,12 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_quantize_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-rewriters",
+            ["-gen-rewriters"],
             "transforms/generated_quantize.inc",
         ),
     ],
@@ -201,12 +202,12 @@ gentbl(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "tensorflow_lite_post_quantize_inc_gen",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "-gen-rewriters",
+            ["-gen-rewriters"],
             "transforms/generated_post_quantize.inc",
         ),
     ],
@@ -253,6 +254,7 @@ cc_library(
         "@llvm-project//mlir:include/mlir/Transforms/InliningUtils.h",
     ],
     deps = [
+        ":cost_estimators",
         ":tensorflow_lite_ops_inc_gen",
         ":tensorflow_lite_structs_inc_gen",
         "//tensorflow/compiler/mlir/lite/quantization:quantization_lib",
@@ -275,6 +277,34 @@ cc_library(
         "@llvm-project//mlir:TransformUtils",
     ],
     alwayslink = 1,
+)
+
+cc_library(
+    name = "variables_utils",
+    srcs = [
+        "utils/variables_utils.cc",
+    ],
+    hdrs = [
+        "utils/variables_utils.h",
+    ],
+    deps = [
+        "//tensorflow/compiler/mlir/tensorflow",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:QuantOps",
+    ],
+)
+
+cc_library(
+    name = "cost_estimators",
+    hdrs = [
+        "utils/arithmetic_count_util.h",
+    ],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:StandardOps",
+        "@llvm-project//mlir:Support",
+    ],
 )
 
 cc_library(
@@ -317,6 +347,24 @@ cc_library(
         "@llvm-project//mlir:StandardOps",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:TensorDialect",
+    ],
+)
+
+cc_library(
+    name = "fake_quant_utils",
+    srcs = [
+        "utils/fake_quant_utils.cc",
+    ],
+    hdrs = [
+        "utils/fake_quant_utils.h",
+    ],
+    deps = [
+        ":tensorflow_lite",
+        "//tensorflow/compiler/mlir/tensorflow",
+        "//tensorflow/compiler/mlir/tensorflow:tensorflow_ops",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:QuantOps",
+        "@llvm-project//mlir:Support",
     ],
 )
 
@@ -451,13 +499,13 @@ cc_library(
         "transforms/generated_legalize_tf.inc",
         "transforms/generated_lower_static_tensor_list.inc",
         "transforms/generated_prepare_tf.inc",
+        "transforms/get_arithmetic_count.cc",
         "transforms/initialize_variables.cc",
         "transforms/insert_call_once_op.cc",
         "transforms/legalize_hashtables.cc",
         "transforms/legalize_tf.cc",
         "transforms/legalize_tf_while.cc",
         "transforms/legalize_variables.cc",
-        "transforms/lower_custom_ops.cc",
         "transforms/lower_static_tensor_list.cc",
         "transforms/optimize_functional_ops.cc",
         "transforms/prepare_composite_functions_tf.cc",
@@ -476,6 +524,8 @@ cc_library(
     ],
     deps = [
         ":constant_utils",
+        ":cost_estimators",
+        ":fake_quant_utils",
         ":lstm_utils",
         ":nms_utils",
         ":perception_ops_utils",
@@ -483,6 +533,7 @@ cc_library(
         ":tensorflow_lite",
         ":tftext_utils",
         ":validators",
+        ":variables_utils",
         "//tensorflow/compiler/mlir:op_or_arg_name_mapper",
         "//tensorflow/compiler/mlir/hlo",
         "//tensorflow/compiler/mlir/lite/quantization:quantization_lib",
@@ -508,6 +559,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/numeric:bits",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:Analysis",
         "@llvm-project//mlir:IR",
@@ -552,6 +604,8 @@ cc_library(
         "transforms/default_quant_params.cc",
         "transforms/generated_post_quantize.inc",
         "transforms/generated_quantize.inc",
+        "transforms/modify_io_nodes.cc",
+        "transforms/optimize_op_order.cc",
         "transforms/post_quantize.cc",
         "transforms/prepare_quantize.cc",
         "transforms/quantize.cc",
@@ -614,10 +668,10 @@ filegroup(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "op_quant_spec_getters_inc",
     compatible_with = get_compatible_with_cloud(),
-    tbl_outs = [("", "utils/generated_op_quant_spec_getters.inc")],
+    tbl_outs = [([], "utils/generated_op_quant_spec_getters.inc")],
     tblgen = "//tensorflow/compiler/mlir/lite/quantization:op_quant_spec_getters_gen",
     td_file = "ir/tfl_ops.td",
     td_srcs = [
@@ -638,16 +692,16 @@ tf_native_cc_binary(
     ],
 )
 
-gentbl(
+gentbl_cc_library(
     name = "converter_inc",
     compatible_with = get_compatible_with_cloud(),
     tbl_outs = [
         (
-            "--gen-operator-converters",
+            ["--gen-operator-converters"],
             "operator_converters.inc",
         ),
         (
-            "--gen-runtime-verifiers",
+            ["--gen-runtime-verifiers"],
             "runtime_verifiers.inc",
         ),
     ],
@@ -756,6 +810,7 @@ cc_library(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
         "@flatbuffers",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
@@ -966,6 +1021,7 @@ cc_library(
     ],
     deps = [
         ":common",
+        ":fake_quant_utils",
         ":tensorflow_lite_d2s",
         ":tensorflow_lite_legalize_tf",
         ":tensorflow_lite_optimize",
@@ -1037,23 +1093,4 @@ cc_library(
     deps = [
         "@llvm-project//llvm:Support",
     ],
-)
-
-# Python Library to check TensorFlow op compatibility.
-py_library(
-    name = "tensorflow_lite_compatibility_tbl_generated",
-    srcs = [
-        "tensorflow_lite_compatibility_tbl_generated.py",
-    ],
-    srcs_version = "PY3",
-    visibility = internal_visibility_allowlist(),
-)
-
-genrule(
-    name = "tfl_compatibility_tbl_gen",
-    srcs = ["transforms/generated_legalize_tf.inc"],
-    outs = ["tensorflow_lite_compatibility_tbl_generated.py"],
-    cmd = "$(location generate_tfl_compatibility_tbl.sh) $(location transforms/generated_legalize_tf.inc) > \"$@\"",
-    compatible_with = get_compatible_with_cloud(),
-    tools = ["generate_tfl_compatibility_tbl.sh"],
 )

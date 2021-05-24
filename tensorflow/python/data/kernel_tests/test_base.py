@@ -20,6 +20,7 @@ from __future__ import print_function
 import os
 import re
 
+from tensorflow.python.data.experimental.ops import lookup_ops as data_lookup_ops
 from tensorflow.python.data.ops import dataset_ops
 from tensorflow.python.data.util import nest
 from tensorflow.python.data.util import structure
@@ -319,7 +320,7 @@ class DatasetTestBase(test.TestCase):
     keys = dataset_ops.Dataset.range(len(vals))
     values = dataset_ops.Dataset.from_tensor_slices(vals)
     ds = dataset_ops.Dataset.zip((keys, values))
-    return lookup_ops.DatasetInitializer(ds)
+    return data_lookup_ops.DatasetInitializer(ds)
 
   def lookupTableInitializer(self, init_source, vals):
     """Returns a lookup table initializer for the given source and values.
@@ -382,7 +383,7 @@ class DatasetTestBase(test.TestCase):
     # delay_ms needed to observe non-deterministic ordering varies across
     # test machines. Usually 10 or 100 milliseconds is enough, but on slow
     # machines it could take longer.
-    for delay_ms in [10, 100, 1000, 20000]:
+    for delay_ms in [10, 100, 1000, 20000, 100000]:
       dataset = dataset_fn(delay_ms)
       actual = self.getDatasetOutput(dataset)
       self.assertCountEqual(expected_elements, actual)

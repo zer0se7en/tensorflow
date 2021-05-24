@@ -698,14 +698,34 @@ static LogicalResult EliminatePassThroughResults(ClusterOp op,
   // New results stores values to use while replacing the old cluster op.
   llvm::SmallVector<Value, 4> new_results;
   new_results.reserve(num_results);
-  for (Value result : return_op->getOperands()) {
-    if (result.getParentBlock() == &body) {
+  for (OpOperand& operand : return_op->getOpOperands()) {
+    // If the corresponding result of the cluster op is used in some resource
+    // update op, do not eliminate the result. Such assignment ops could be for
+    // device resources and are required during fusing of the execute op and
+    // the resource update ops.
+    bool is_used_for_resource_write = llvm::any_of(
+        op.getResult(operand.getOperandNumber()).getUsers(),
+        [](Operation* user) { return isa<TF::AssignVariableOp>(user); });
+
+    // TODO(b/186717563): Eliminate all pass through results once XLA correctly
+    // handles empty computations. Another approach could be to drop empty
+    // clusters within MLIR but that seems to trigger other failures but can be
+    // considered again.
+    // Old bridge only removes unsupported TPU types (only string for now)
+    // during outside compilation extraction so this should be enough for
+    // the parity.
+    bool is_unsupported_type = getElementTypeOrSelf(operand.get().getType())
+                                   .isa<mlir::TF::StringType>();
+    Value result = operand.get();
+    if (is_unsupported_type && result.getParentBlock() != &body &&
+        !is_used_for_resource_write) {
+      // Pass through result.
+      new_results.push_back(result);
+    } else {
       // This result will be populated with the new result after rewriting the
       // cluster op.
       new_results.push_back(nullptr);
       cluster_vals.push_back(result);
-    } else {
-      new_results.push_back(result);
     }
   }
 

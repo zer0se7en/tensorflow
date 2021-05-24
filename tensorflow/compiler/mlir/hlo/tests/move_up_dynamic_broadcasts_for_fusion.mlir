@@ -129,6 +129,7 @@ func @move_shape_of_into_assuming(%arg0 : !shape.witness,
     shape.assuming_yield %arg1, %1 : tensor<?x32xf32>, tensor<?x32xf32>
   }
   %2 = shape.shape_of %0#1 : tensor<?x32xf32> -> tensor<3xindex>
+  "use"(%0#0, %0#1) : (tensor<?x32xf32>, tensor<?x32xf32>) -> ()
   return %2 : tensor<3xindex>
 }
 
@@ -150,6 +151,7 @@ func @move_cstr_broadcastable_into_assuming(%arg0 : !shape.witness,
     shape.assuming_yield %arg1, %1 : tensor<2xindex>, tensor<3xindex>
   }
   %1 = shape.cstr_broadcastable %arg1, %0#1 : tensor<2xindex>, tensor<3xindex>
+  "use"(%0#0, %0#1) : (tensor<2xindex>, tensor<3xindex>) -> ()
   return %1 : !shape.witness
 }
 
@@ -223,6 +225,7 @@ func @move_shape_of_out_of_assuming(%arg0 : !shape.witness,
     %2 = shape.shape_of %arg1 : tensor<2x?xf32> -> tensor<2xindex>
     shape.assuming_yield %1, %2 : tensor<2x?xf32>, tensor<2xindex>
   }
+  "use"(%0#0, %0#1) : (tensor<2x?xf32>, tensor<2xindex>) -> ()
   return %0#1 : tensor<2xindex>
 }
 
@@ -257,8 +260,8 @@ func @merge_assuming_ops(%arg0: tensor<?x32xf16>, %arg1 : tensor<?x32xf16>,
   // CHECK:      %[[SHAPE2:.*]] = shape.shape_of %[[ARG2]]
   // CHECK:      %[[WITNESS0:.*]] = shape.cstr_broadcastable %[[SHAPE0]], %[[SHAPE1]]
   // CHECK:      %[[WITNESS1:.*]] = shape.cstr_broadcastable %[[SHAPE0]], %[[SHAPE1]], %[[SHAPE2]]
-  // CHECK:      %[[WITNESS_MERGED:.*]] = shape.cstr_broadcastable %[[SHAPE0]], %[[SHAPE1]], %[[SHAPE2]]
-  // CHECK:      %[[MERGED:.*]]:2 = shape.assuming %[[WITNESS_MERGED]]
+  // CHECK:      %[[COMBINED_WITNESS:.*]] = shape.assuming_all %[[WITNESS0]], %[[WITNESS1]]
+  // CHECK:      %[[MERGED:.*]]:2 = shape.assuming %[[COMBINED_WITNESS]]
   // CHECK-SAME: {
   // CHECK:        "some.op"
   // CHECK:        %[[RESULT0:.*]] = "some.producer"
@@ -283,7 +286,41 @@ func @merge_assuming_ops(%arg0: tensor<?x32xf16>, %arg1 : tensor<?x32xf16>,
     %8 = "another.producer"() : () -> tensor<?x?x32xf16>
     shape.assuming_yield %8 : tensor<?x?x32xf16>
   }
+  "use"(%5, %7) : (tensor<?x32xf16>, tensor<?x?x32xf16>) -> ()
   return %7 : tensor<?x?x32xf16>
+}
+
+// -----
+
+// Do not merge assuming ops if witness will not dominate use.
+// CHECK: @do_not_merge_assuming_ops
+func @do_not_merge_assuming_ops() {
+  // CHECK: shape.assuming
+  // CHECK: shape.assuming
+  %0 = "some.witness"() : () -> !shape.witness
+  %1 = shape.assuming %0 -> (!shape.witness) {
+    %2 = "some.witness"() : () -> !shape.witness
+    shape.assuming_yield %2 : !shape.witness
+  }
+  shape.assuming %1 {
+    "some.op"() : () -> ()
+    shape.assuming_yield
+  }
+  return
+}
+
+// -----
+
+// CHECK:      @eliminate_extent_tensor_cast
+// CHECK-SAME: (%[[ARG:.*]]: tensor<2x?x4xf32>)
+func @eliminate_extent_tensor_cast(%arg : tensor<2x?x4xf32>) {
+  // CHECK-NOT:  shape_of
+  // CHECK:      %[[RESULT:.*]] = shape.shape_of %[[ARG]] : tensor<2x?x4xf32> -> tensor<3xindex>
+  // CHECK-NEXT: "use"(%[[RESULT]]) : (tensor<3xindex>) -> ()
+  %0 = shape.shape_of %arg : tensor<2x?x4xf32> -> tensor<?xindex>
+  %1 = tensor.cast %0 : tensor<?xindex> to tensor<3xindex>
+  "use"(%1) : (tensor<3xindex>) -> ()
+  return
 }
 
 // -----
@@ -293,33 +330,32 @@ func @merge_assuming_ops(%arg0: tensor<?x32xf16>, %arg1 : tensor<?x32xf16>,
 // CHECK-SAME: (%[[ARG0:.*]]: tensor<?x32xf16>, %[[ARG1:.*]]: tensor<?x32xf16>, %[[ARG2:.*]]: tensor<?x?x32xf16>)
 func @sub_sub(%arg0: tensor<?x32xf16>, %arg1 : tensor<?x32xf16>,
     %arg2: tensor<?x?x32xf16>) -> tensor<?x?x32xf16> {
-  // CHECK:      %[[SHAPE0:.*]] = shape.shape_of %[[ARG0]]
-  // CHECK:      %[[SHAPE1:.*]] = shape.shape_of %[[ARG1]]
-  // CHECK:      %[[SHAPE2:.*]] = shape.shape_of %[[ARG2]]
-  // CHECK:      %[[WITNESS:.*]] = shape.cstr_broadcastable %[[SHAPE2]], %[[SHAPE0]], %[[SHAPE1]], %[[SHAPE0]], %[[SHAPE1]]
-  // CHECK:      %[[ASSUMING_RESULTS:.*]]:4 = shape.assuming %[[WITNESS]]
-  // CHECK-SAME: {
+  // CHECK-DAG:  %[[SHAPE0:.*]] = shape.shape_of %[[ARG0]]
+  // CHECK-DAG:  %[[SHAPE1:.*]] = shape.shape_of %[[ARG1]]
+  // CHECK-DAG:  %[[SHAPE2:.*]] = shape.shape_of %[[ARG2]]
+  // CHECK-DAG:  %[[WITNESS0:.*]] = shape.cstr_broadcastable %[[SHAPE0]], %[[SHAPE1]]
+  // CHECK-DAG:  %[[WITNESS1:.*]] = shape.cstr_broadcastable %[[SHAPE2]], %[[SHAPE0]], %[[SHAPE1]]
+  // CHECK-DAG:  %[[COMBINED_WITNESS:.*]] = shape.assuming_all %[[WITNESS0]], %[[WITNESS1]]
+  // CHECK:      %[[ASSUMING_RESULT:.*]] = shape.assuming %[[COMBINED_WITNESS]]
   // CHECK:        %[[BCASTED_SHAPE01:.*]] = shape.broadcast %[[SHAPE0]], %[[SHAPE1]]
-  // CHECK:        %[[PARTIALLY_BCASTED_ARG0:.*]] = "mhlo.dynamic_broadcast_in_dim"(%[[ARG0]], %[[BCASTED_SHAPE01]]) {broadcast_dimensions = dense<[0, 1]>
-  // CHECK:        %[[PARTIALLY_BCASTED_ARG1:.*]] = "mhlo.dynamic_broadcast_in_dim"(%[[ARG1]], %[[BCASTED_SHAPE01]]) {broadcast_dimensions = dense<[0, 1]>
   // CHECK:        %[[BCASTED_SHAPE012:.*]] = shape.broadcast %[[SHAPE2]], %[[BCASTED_SHAPE01]]
   // CHECK:        %[[BCASTED_ARG2:.*]] = "mhlo.dynamic_broadcast_in_dim"(%[[ARG2]], %[[BCASTED_SHAPE012]]) {broadcast_dimensions = dense<[0, 1, 2]>
-  // CHECK:        %[[BCASTED_ARG0:.*]] = "mhlo.dynamic_broadcast_in_dim"(%[[PARTIALLY_BCASTED_ARG0]], %[[BCASTED_SHAPE012]]) {broadcast_dimensions = dense<[1, 2]> : tensor<2xi64>}
-  // CHECK:        %[[BCASTED_ARG1:.*]] = "mhlo.dynamic_broadcast_in_dim"(%[[PARTIALLY_BCASTED_ARG1]], %[[BCASTED_SHAPE012]]) {broadcast_dimensions = dense<[1, 2]> : tensor<2xi64>}
+  // CHECK:        %[[BCASTED_ARG0:.*]] = "mhlo.dynamic_broadcast_in_dim"(%[[ARG0]], %[[BCASTED_SHAPE012]]) {broadcast_dimensions = dense<[1, 2]> : tensor<2xi64>}
+  // CHECK:        %[[BCASTED_ARG1:.*]] = "mhlo.dynamic_broadcast_in_dim"(%[[ARG1]], %[[BCASTED_SHAPE012]]) {broadcast_dimensions = dense<[1, 2]> : tensor<2xi64>}
   // CHECK:        %[[TMP:.*]] = mhlo.subtract %[[BCASTED_ARG0]], %[[BCASTED_ARG1]]
   // CHECK:        %[[RESULT:.*]] = mhlo.subtract %[[BCASTED_ARG2]], %[[TMP]]
-  // CHECK:        shape.assuming_yield %{{.*}}, %{{.*}}, %{{.*}}, %[[RESULT]]
-  // CHECK:      }
-  // CHECK:      return %[[ASSUMING_RESULTS]]#3
+  // CHECK:        shape.assuming_yield %[[RESULT]]
+  // CHECK:      return %[[ASSUMING_RESULT]]
   %0 = shape.shape_of %arg0 : tensor<?x32xf16> -> tensor<2xindex>
   %1 = shape.shape_of %arg1 : tensor<?x32xf16> -> tensor<2xindex>
   %2 = shape.cstr_broadcastable %0, %1 : tensor<2xindex>, tensor<2xindex>
   %3 = shape.assuming %2 -> (tensor<?x32xf16>) {
     %8 = shape.shape_of %arg0 : tensor<?x32xf16> -> tensor<2xindex>
     %9 = shape.shape_of %arg1 : tensor<?x32xf16> -> tensor<2xindex>
-    %10 = shape.broadcast %8, %9 : tensor<2xindex>, tensor<2xindex> -> tensor<2xindex>
-    %12 = "mhlo.dynamic_broadcast_in_dim"(%arg0, %10) {broadcast_dimensions = dense<[0, 1]> : tensor<2xi64>} : (tensor<?x32xf16>, tensor<2xindex>) -> tensor<?x32xf16>
-    %13 = "mhlo.dynamic_broadcast_in_dim"(%arg1, %10) {broadcast_dimensions = dense<[0, 1]> : tensor<2xi64>} : (tensor<?x32xf16>, tensor<2xindex>) -> tensor<?x32xf16>
+    %10 = shape.broadcast %8, %9 : tensor<2xindex>, tensor<2xindex> -> tensor<?xindex>
+    %11 = tensor.cast %10 : tensor<?xindex> to tensor<2xindex>
+    %12 = "mhlo.dynamic_broadcast_in_dim"(%arg0, %11) {broadcast_dimensions = dense<[0, 1]> : tensor<2xi64>} : (tensor<?x32xf16>, tensor<2xindex>) -> tensor<?x32xf16>
+    %13 = "mhlo.dynamic_broadcast_in_dim"(%arg1, %11) {broadcast_dimensions = dense<[0, 1]> : tensor<2xi64>} : (tensor<?x32xf16>, tensor<2xindex>) -> tensor<?x32xf16>
     %14 = mhlo.subtract %12, %13 : tensor<?x32xf16>
     shape.assuming_yield %14 : tensor<?x32xf16>
   }
@@ -329,9 +365,10 @@ func @sub_sub(%arg0: tensor<?x32xf16>, %arg1 : tensor<?x32xf16>,
   %7 = shape.assuming %6 -> (tensor<?x?x32xf16>) {
     %8 = shape.shape_of %arg2 : tensor<?x?x32xf16> -> tensor<3xindex>
     %9 = shape.shape_of %3 : tensor<?x32xf16> -> tensor<2xindex>
-    %10 = shape.broadcast %8, %9 : tensor<3xindex>, tensor<2xindex> -> tensor<3xindex>
-    %12 = "mhlo.dynamic_broadcast_in_dim"(%arg2, %10) {broadcast_dimensions = dense<[0, 1, 2]> : tensor<3xi64>} : (tensor<?x?x32xf16>, tensor<3xindex>) -> tensor<?x?x32xf16>
-    %13 = "mhlo.dynamic_broadcast_in_dim"(%3, %10) {broadcast_dimensions = dense<[1, 2]> : tensor<2xi64>} : (tensor<?x32xf16>, tensor<3xindex>) -> tensor<?x?x32xf16>
+    %10 = shape.broadcast %8, %9 : tensor<3xindex>, tensor<2xindex> -> tensor<?xindex>
+    %11 = tensor.cast %10 : tensor<?xindex> to tensor<3xindex>
+    %12 = "mhlo.dynamic_broadcast_in_dim"(%arg2, %11) {broadcast_dimensions = dense<[0, 1, 2]> : tensor<3xi64>} : (tensor<?x?x32xf16>, tensor<3xindex>) -> tensor<?x?x32xf16>
+    %13 = "mhlo.dynamic_broadcast_in_dim"(%3, %11) {broadcast_dimensions = dense<[1, 2]> : tensor<2xi64>} : (tensor<?x32xf16>, tensor<3xindex>) -> tensor<?x?x32xf16>
     %14 = mhlo.subtract %12, %13 : tensor<?x?x32xf16>
     shape.assuming_yield %14 : tensor<?x?x32xf16>
   }

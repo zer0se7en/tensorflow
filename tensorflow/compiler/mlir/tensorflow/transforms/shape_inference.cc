@@ -20,6 +20,7 @@ limitations under the License.
 #include <initializer_list>
 #include <iterator>
 #include <queue>
+#include <stack>
 
 #include "llvm/ADT/Hashing.h"
 #include "llvm/ADT/None.h"
@@ -902,15 +903,7 @@ bool ShapeInference::InferShapeForXlaHostComputeMlir(
   if (host_module.getValue().empty()) return false;
 
   mlir::OwningModuleRef module_for_func;
-  if (!tensorflow::DeserializeMlirModule(host_module.getValue().str(),
-                                         host_compute_op->getContext(),
-                                         &module_for_func)
-           .ok()) {
-    return false;
-  }
-
-  FuncOp func = module_for_func->lookupSymbol<FuncOp>("host_func");
-  if (!func) return false;
+  FuncOp func = host_compute_op.GetHostFunc(&module_for_func);
 
   // Update/use input shapes for function.
   FunctionType func_type = func.getType();
@@ -1062,20 +1055,10 @@ bool ShapeInference::RefineTypeForPassThroughOperands(Operation* op,
     Type operand_type = std::get<0>(entry).getType();
     Value result = std::get<1>(entry);
     TensorType result_type = result.getType().cast<TensorType>();
-    if (operand_type == result_type) continue;
-    // Pass through nodes may remove ref types, don't consider that as
-    // refinement.
-    // TODO(jpienaar): There could be refinement in addition to this, so
-    // refine this.
-    if (operand_type.cast<TensorType>()
-            .getElementType()
-            .isa<TF::TensorFlowRefType>() &&
-        !result_type.cast<TensorType>()
-             .getElementType()
-             .isa<TF::TensorFlowRefType>())
-      continue;
+    Type inferred_type = TypeMeet(result_type, operand_type);
+    if (result_type == inferred_type) continue;
 
-    if (!UpdateTypeAndInsertIncompatibleUseCasts(operand_type, result))
+    if (!UpdateTypeAndInsertIncompatibleUseCasts(inferred_type, result))
       continue;
     changed = true;
   }

@@ -19,6 +19,7 @@ import itertools
 import json
 import os
 import warnings
+import weakref
 
 from tensorflow.python.autograph.lang import directives
 from tensorflow.python.data.experimental.ops import distribute_options
@@ -55,6 +56,7 @@ from tensorflow.python.keras.saving.saved_model import json_utils
 from tensorflow.python.keras.saving.saved_model import model_serialization
 from tensorflow.python.keras.utils import generic_utils
 from tensorflow.python.keras.utils import layer_utils
+from tensorflow.python.keras.utils import object_identity
 from tensorflow.python.keras.utils import tf_utils
 from tensorflow.python.keras.utils import version_utils
 from tensorflow.python.keras.utils.io_utils import ask_to_proceed_with_overwrite
@@ -73,6 +75,7 @@ from tensorflow.python.training import checkpoint_management
 from tensorflow.python.training import py_checkpoint_reader
 from tensorflow.python.training.tracking import base as trackable
 from tensorflow.python.training.tracking import data_structures
+from tensorflow.python.training.tracking import graph_view as graph_view_lib
 from tensorflow.python.training.tracking import util as trackable_utils
 from tensorflow.python.util import nest
 from tensorflow.python.util import tf_decorator
@@ -311,8 +314,7 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     # Fault-tolerance handler. Set in `ModelCheckpoint`.
     self._training_state = None
     self._saved_model_inputs_spec = None
-    self._trackable_saver = (
-        trackable_utils.saver_with_op_caching(self))
+    self._trackable_saver = saver_with_op_caching(self)
 
     self._steps_per_execution = None
 
@@ -1338,6 +1340,11 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
           test_function, experimental_relax_shapes=True)
 
     self.test_function = test_function
+
+    if self._cluster_coordinator:
+      self.test_function = lambda iterator: self._cluster_coordinator.schedule(  # pylint: disable=g-long-lambda
+          test_function, args=(iterator,))
+
     return self.test_function
 
   def evaluate(self,
@@ -1444,8 +1451,8 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
       raise TypeError('Invalid keyword arguments: %s' % (kwargs,))
 
     if self.distribute_strategy._should_use_with_coordinator:  # pylint: disable=protected-access
-      raise NotImplementedError('`model.evaluate` is not yet supported with '
-                                '`ParameterServerStrategy`.')
+      self._cluster_coordinator = cluster_coordinator.ClusterCoordinator(
+          self.distribute_strategy)
 
     with self.distribute_strategy.scope():
       # Use cached evaluation data only when it's called in `Model.fit`
@@ -2309,24 +2316,30 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
         # streaming restore for any variables created in the future.
         trackable_utils.streaming_restore(status=status, session=session)
       status.assert_nontrivial_match()
-      return status
-    if h5py is None:
-      raise ImportError(
-          '`load_weights` requires h5py when loading weights from HDF5.')
-    if not self._is_graph_network and not self.built:
-      raise ValueError(
-          'Unable to load weights saved in HDF5 format into a subclassed '
-          'Model which has not created its variables yet. Call the Model '
-          'first, then load the weights.')
-    self._assert_weights_created()
-    with h5py.File(filepath, 'r') as f:
-      if 'layer_names' not in f.attrs and 'model_weights' in f:
-        f = f['model_weights']
-      if by_name:
-        hdf5_format.load_weights_from_hdf5_group_by_name(
-            f, self.layers, skip_mismatch=skip_mismatch)
-      else:
-        hdf5_format.load_weights_from_hdf5_group(f, self.layers)
+    else:
+      status = None
+      if h5py is None:
+        raise ImportError(
+            '`load_weights` requires h5py when loading weights from HDF5.')
+      if not self._is_graph_network and not self.built:
+        raise ValueError(
+            'Unable to load weights saved in HDF5 format into a subclassed '
+            'Model which has not created its variables yet. Call the Model '
+            'first, then load the weights.')
+      self._assert_weights_created()
+      with h5py.File(filepath, 'r') as f:
+        if 'layer_names' not in f.attrs and 'model_weights' in f:
+          f = f['model_weights']
+        if by_name:
+          hdf5_format.load_weights_from_hdf5_group_by_name(
+              f, self.layers, skip_mismatch=skip_mismatch)
+        else:
+          hdf5_format.load_weights_from_hdf5_group(f, self.layers)
+
+    # Perform any layer defined finalization of the layer state.
+    for layer in self.layers:
+      layer.finalize_state()
+    return status
 
   def _updated_config(self):
     """Util shared between different serialization methods.
@@ -2721,10 +2734,6 @@ class Model(base_layer.Layer, version_utils.ModelVersionSelector):
     return functions
 
   def _should_eval(self, epoch, validation_freq):
-    if self._cluster_coordinator:
-      raise NotImplementedError(
-          'Evaluation in `model.fit` with '
-          '`ParameterServerStrategy` is not yet supported.')
     epoch = epoch + 1  # one-index the user-facing epoch.
     if isinstance(validation_freq, int):
       return epoch % validation_freq == 0
@@ -2963,3 +2972,13 @@ def flatten_metrics_in_order(logs, metrics_names):
 def _is_per_replica_instance(obj):
   return (isinstance(obj, ds_values.DistributedValues) and
           isinstance(obj, composite_tensor.CompositeTensor))
+
+
+def saver_with_op_caching(obj):
+  if context.executing_eagerly():
+    saveables_cache = None
+  else:
+    saveables_cache = object_identity.ObjectIdentityWeakKeyDictionary()
+  return trackable_utils.TrackableSaver(
+      graph_view_lib.ObjectGraphView(
+          weakref.ref(obj), saveables_cache=saveables_cache))

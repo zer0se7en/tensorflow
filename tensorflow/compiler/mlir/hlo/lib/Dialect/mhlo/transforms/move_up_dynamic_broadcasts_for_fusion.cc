@@ -55,7 +55,8 @@ struct ShapeReificationPattern : public OpRewritePattern<shape::ShapeOfOp> {
     if (!shape_origin) return failure();
 
     llvm::SmallVector<Value, 1> reifications;
-    if (failed(shape_origin.reifyReturnTypeShapes(rewriter, reifications)))
+    if (failed(shape_origin.reifyReturnTypeShapes(
+            rewriter, shape_origin->getOperands(), reifications)))
       return failure();
     assert(reifications.size() == 1);
     Value reified_shape = reifications.front();
@@ -245,28 +246,19 @@ struct MergeAssumingOpsPattern : public OpRewritePattern<shape::AssumingOp> {
 
   LogicalResult matchAndRewrite(shape::AssumingOp op,
                                 PatternRewriter &rewriter) const override {
-    // Merge assuming op with directly preceding one.
+    // Merge assuming op with directly preceding one if both witnesses are
+    // availiable.
     auto preceding_op =
         llvm::dyn_cast_or_null<shape::AssumingOp>(op->getPrevNode());
     if (!preceding_op) return failure();
-
-    // For now, both witnesses must be cstr_broadcastable.
-    // TODO(frgossen): Generalize this.
-    auto bcastable_a = op.witness().getDefiningOp<shape::CstrBroadcastableOp>();
-    auto bcastable_b =
-        preceding_op.witness().getDefiningOp<shape::CstrBroadcastableOp>();
-    if (!bcastable_a || !bcastable_b) return failure();
+    if (op.witness().getDefiningOp() == preceding_op) return failure();
 
     // Merge witnesses.
     OpBuilder::InsertionGuard guard(rewriter);
     rewriter.setInsertionPoint(preceding_op);
-    SmallVector<Value, 8> new_operands;
-    new_operands.append(bcastable_a->getOperands().begin(),
-                        bcastable_a->getOperands().end());
-    new_operands.append(bcastable_b->getOperands().begin(),
-                        bcastable_b->getOperands().end());
-    Value new_witness = rewriter.create<shape::CstrBroadcastableOp>(
-        bcastable_a.getLoc(), new_operands);
+    Value new_witness = rewriter.create<shape::AssumingAllOp>(
+        op.witness().getDefiningOp()->getLoc(),
+        ValueRange{preceding_op.witness(), op.witness()});
 
     // Merge assuming ops.
     Block *body_a = preceding_op.getBody();
@@ -310,6 +302,61 @@ struct MergeAssumingOpsPattern : public OpRewritePattern<shape::AssumingOp> {
     size_t split_at = preceding_op->getNumResults();
     rewriter.replaceOp(preceding_op, new_results.take_front(split_at));
     rewriter.replaceOp(op, new_results.drop_front(split_at));
+    return success();
+  }
+};
+
+// Eliminate casted extent tensors. Instead, produce the concrete extent tensor
+// type where possible.
+struct CanonicalizeCastedShapeOfOpPattern
+    : public OpRewritePattern<tensor::CastOp> {
+  using OpRewritePattern<tensor::CastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(tensor::CastOp op,
+                                PatternRewriter &rewriter) const override {
+    // Only merge tensor cast into `shape_of` ops.
+    auto shape_of_op = op.source().getDefiningOp<shape::ShapeOfOp>();
+    if (!shape_of_op) return failure();
+
+    // Desired type must be an extent tensor type.
+    auto result_ty = op.getType().dyn_cast<RankedTensorType>();
+    if (!result_ty || result_ty.getRank() != 1 ||
+        !result_ty.getElementType().isIndex())
+      return failure();
+
+    rewriter.replaceOpWithNewOp<shape::ShapeOfOp>(op, result_ty,
+                                                  shape_of_op.arg());
+    if (shape_of_op->getUses().empty()) rewriter.eraseOp(shape_of_op);
+    return success();
+  }
+};
+
+// TODO(frgossen): Remove this once it has landed upstream.
+struct CanonicalizeBroadcastPattern
+    : public OpRewritePattern<shape::BroadcastOp> {
+  using OpRewritePattern<shape::BroadcastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(shape::BroadcastOp op,
+                                PatternRewriter &rewriter) const override {
+    // Only concretize dynamic extent tensor result types.
+    auto resultTy = op.getType().dyn_cast<RankedTensorType>();
+    if (!resultTy || !resultTy.isDynamicDim(0)) return failure();
+
+    // Infer resulting shape rank if possible.
+    int64_t maxRank = 0;
+    for (Value shape : op.shapes()) {
+      if (auto extentTensorTy = shape.getType().dyn_cast<RankedTensorType>()) {
+        // Cannot infer resulting shape rank if any operand is dynamically
+        // ranked.
+        if (extentTensorTy.isDynamicDim(0)) return failure();
+        maxRank = std::max(maxRank, extentTensorTy.getDimSize(0));
+      }
+    }
+
+    auto newOp = rewriter.create<shape::BroadcastOp>(
+        op.getLoc(), RankedTensorType::get({maxRank}, rewriter.getIndexType()),
+        op.shapes());
+    rewriter.replaceOpWithNewOp<tensor::CastOp>(op, op.getType(), newOp);
     return success();
   }
 };
@@ -385,6 +432,8 @@ void PopulateMoveUpDynamicBroadcastsForFusionPatterns(
     MLIRContext *context, OwningRewritePatternList *patterns) {
   // clang-format off
   patterns->insert<
+      CanonicalizeBroadcastPattern,
+      CanonicalizeCastedShapeOfOpPattern,
       InlineBroadcastedShapeOperandsPattern<shape::CstrBroadcastableOp>,
       MergeAssumingOpsPattern,
       MoveIntoAssumingOpPattern<shape::ShapeOfOp>,
@@ -394,6 +443,7 @@ void PopulateMoveUpDynamicBroadcastsForFusionPatterns(
       MoveUpBroadcastInDimOpPattern,
       ShapeReificationPattern>(context);
   // clang-format on
+  tensor::CastOp::getCanonicalizationPatterns(*patterns, context);
 }
 
 std::unique_ptr<FunctionPass> createMoveUpDynamicBroadcastsForFusionPass() {

@@ -362,6 +362,7 @@ cc_library(
         "//tensorflow/compiler/jit:shape_inference",
         "//tensorflow/compiler/mlir:array_container_utils",
         "//tensorflow/compiler/mlir/tensorflow:compile_mlir_util_no_tf_dialect_passes",
+        "//tensorflow/compiler/xla/client:value_inference",
         "//tensorflow/compiler/xla:protobuf_util",
         "//tensorflow/compiler/xla:shape_util",
         "//tensorflow/compiler/xla:status_macros",
@@ -655,9 +656,9 @@ cc_library(
         "//tensorflow/core:core_cpu_internal",
         "//tensorflow/core:framework",
         "//tensorflow/core:framework_internal",
-        "//tensorflow/core:graph",
         "//tensorflow/core:lib",
         "//tensorflow/core:protos_all_cc",
+        "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/types:optional",
     ],
@@ -909,6 +910,11 @@ cc_library(
         ],
         if_true = [],
     ),
+    visibility = [
+        # We define a new TPU device in TFRT to enable TFRT TPU Runtime.
+        "//learning/brain/tfrt/tf_tpu:__pkg__",
+        ":internal",
+    ],
     deps = if_libtpu(
         if_false = [
             ":mlir_bridge_pass",
