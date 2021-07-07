@@ -6,6 +6,7 @@ load(
     "if_cuda_or_rocm",
     "if_mobile",
     "if_not_windows",
+    "if_oss",
     "tf_cc_binary",
     "tf_cc_shared_object",
     "tf_cc_test",
@@ -19,6 +20,11 @@ load(
     "if_mlir_generated_cpu_kernels_enabled",
     "if_mlir_generated_experimental_kernels_enabled",
     "if_mlir_generated_gpu_kernels_enabled",
+)
+load(
+    "//tensorflow/core/platform:build_config.bzl",
+    "tf_fingerprint_deps",
+    "tf_kernel_tests_linkstatic",
 )
 
 # buildifier: disable=same-origin-load
@@ -44,12 +50,6 @@ load("//tensorflow:tensorflow.bzl", "tf_cuda_cc_tests")
 
 # buildifier: disable=same-origin-load
 load("//tensorflow:tensorflow.bzl", "filegroup")
-
-# For platform specific build config
-load(
-    "//tensorflow/core/platform:build_config.bzl",
-    "tf_kernel_tests_linkstatic",
-)
 load(
     "//tensorflow/core/platform:build_config_root.bzl",
     "tf_cuda_tests_tags",
@@ -1063,8 +1063,21 @@ tf_kernel_library(
 
 tf_kernel_library(
     name = "constant_op",
+    copts = if_mlir_generated_experimental_kernels_enabled([
+        "-DMLIR_GENERATED_EXPERIMENTAL_KERNELS_ENABLED",
+    ]) + if_mlir_generated_gpu_kernels_enabled(
+        ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
+    ),
+    # *.cu.cc sources are compiled with gpu_copts instead of copts.
+    gpu_copts = if_mlir_generated_experimental_kernels_enabled([
+        "-DMLIR_GENERATED_EXPERIMENTAL_KERNELS_ENABLED",
+    ]) + if_mlir_generated_gpu_kernels_enabled(
+        ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
+    ),
     prefix = "constant_op",
-    deps = ARRAY_DEPS,
+    deps = ARRAY_DEPS + [
+        "//tensorflow/core/kernels/mlir_generated:constant_op",
+    ],
 )
 
 tf_kernel_library(
@@ -1323,6 +1336,43 @@ tf_kernel_library(
 )
 
 cc_library(
+    name = "composite_tensor_variant",
+    srcs = ["composite_tensor_variant.cc"],
+    hdrs = ["composite_tensor_variant.h"],
+    deps = [
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:protos_all_cc",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+tf_cc_test(
+    name = "composite_tensor_variant_test",
+    size = "small",
+    srcs = ["composite_tensor_variant_test.cc"],
+    deps = [
+        ":composite_tensor_variant",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:protos_all_cc",
+        "//tensorflow/core:test",
+        "//tensorflow/core:test_main",
+        "//tensorflow/core:testlib",
+    ],
+)
+
+tf_kernel_library(
+    name = "composite_tensor_ops",
+    srcs = ["composite_tensor_ops.cc"],
+    deps = [
+        ":composite_tensor_variant",
+        "//tensorflow/core:framework",
+        "//tensorflow/core:lib",
+        "//tensorflow/core:protos_all_cc",
+    ],
+)
+
+cc_library(
     name = "ragged_ops",
     deps = [
         ":ragged_cross_op",
@@ -1532,6 +1582,9 @@ tf_cc_test(
     name = "batch_norm_op_test",
     size = "small",
     srcs = ["batch_norm_op_test.cc"],
+    tags = [
+        "no_oss",  # b/189866692
+    ],
     deps = [
         ":batch_norm_op",
         ":ops_testutil",
@@ -2983,7 +3036,6 @@ cc_library(
     deps = [
         ":fixed_length_record_reader_op",
         ":identity_reader_op",
-        ":lmdb_reader_op",
         ":matching_files_op",
         ":reader_ops",
         ":restore_op",
@@ -2992,7 +3044,10 @@ cc_library(
         ":text_line_reader_op",
         ":tf_record_reader_op",
         ":whole_file_read_ops",
-    ],
+    ] + select({
+        "//tensorflow:fuchsia": [],
+        "//conditions:default": [":lmdb_reader_op"],
+    }),
 )
 
 IO_DEPS = [
@@ -3340,6 +3395,10 @@ tf_kernel_library(
     copts = if_mlir_generated_gpu_kernels_enabled(
         ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
     ),
+    # *.cu.cc sources are compiled with gpu_copts instead of copts.
+    gpu_copts = if_mlir_generated_gpu_kernels_enabled(
+        ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
+    ),
     prefix = "cast_op",
     deps = MATH_DEPS + [
         "//tensorflow/core/kernels/mlir_generated:cast_op",
@@ -3416,6 +3475,7 @@ tf_kernel_library(
     name = "segment_reduction_ops",
     prefix = "segment_reduction_ops",
     deps = MATH_DEPS + if_cuda_or_rocm([
+        ":gpu_prim_helpers",
         "//tensorflow/core/util:cuda_solvers",
     ]),
 )
@@ -4005,6 +4065,12 @@ tf_kernel_library(
     ) + if_mlir_generated_gpu_kernels_enabled(
         ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
     ),
+    # *.cu.cc sources are compiled with gpu_copts instead of copts.
+    gpu_copts = if_mlir_generated_experimental_kernels_enabled(
+        ["-DMLIR_GENERATED_EXPERIMENTAL_KERNELS_ENABLED"],
+    ) + if_mlir_generated_gpu_kernels_enabled(
+        ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
+    ),
     prefix = "relu_op",
     deps = NN_DEPS + [
         "//tensorflow/core/kernels/mlir_generated:relu_op",
@@ -4021,8 +4087,21 @@ tf_kernel_library(
 
 tf_kernel_library(
     name = "softplus_op",
+    copts = if_mlir_generated_experimental_kernels_enabled(
+        ["-DMLIR_GENERATED_EXPERIMENTAL_KERNELS_ENABLED"],
+    ) + if_mlir_generated_gpu_kernels_enabled(
+        ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
+    ),
+    # *.cu.cc sources are compiled with gpu_copts instead of copts.
+    gpu_copts = if_mlir_generated_experimental_kernels_enabled(
+        ["-DMLIR_GENERATED_EXPERIMENTAL_KERNELS_ENABLED"],
+    ) + if_mlir_generated_gpu_kernels_enabled(
+        ["-DMLIR_GENERATED_GPU_KERNELS_ENABLED"],
+    ),
     prefix = "softplus_op",
-    deps = NN_DEPS,
+    deps = NN_DEPS + [
+        "//tensorflow/core/kernels/mlir_generated:softplus_op",
+    ],
 )
 
 tf_kernel_library(
@@ -5030,6 +5109,7 @@ cc_library(
         ":string_to_hash_bucket_op",
         ":string_upper_op",
         ":substr_op",
+        ":tensor_to_hash_bucket_op",
         ":unicode_ops",
         ":unicode_script_op",
         ":unsorted_segment_join_op",
@@ -5068,6 +5148,15 @@ tf_kernel_library(
         "string_to_hash_bucket_op.h",
     ],
     deps = STRING_DEPS,
+)
+
+tf_kernel_library(
+    name = "tensor_to_hash_bucket_op",
+    prefix = "tensor_to_hash_bucket_op",
+    deps = STRING_DEPS + if_oss(
+        if_cuda(["@farmhash_gpu_archive//:farmhash_gpu"]),
+        tf_fingerprint_deps(),
+    ),
 )
 
 tf_kernel_library(
@@ -5997,6 +6086,8 @@ filegroup(
         "stateless_random_ops_v2.h",
         "sparse_xent_op.h",
         "sparse_fill_empty_rows_op.h",
+        "sparse_reorder_op.h",
+        "sparse_tensor_dense_matmul_op.h",
         "string_util.h",
         "string_to_hash_bucket_op.h",
         "string_to_hash_bucket_fast_op.h",
@@ -6017,9 +6108,11 @@ filegroup(
         "//tensorflow/core/data:dataset_utils.h",
         "//tensorflow/core/data:name_utils.h",
         "//tensorflow/core/data:rewrite_utils.h",
-        "//tensorflow/core/data:root_dataset.h",
         "//tensorflow/core/data:split_utils.h",
+        "//tensorflow/core/data:root_dataset.h",
+        "//tensorflow/core/data:serialization_utils.h",
         "//tensorflow/core/data:stats_utils.h",
+        "//tensorflow/core/data:unbounded_thread_pool.h",
         "//tensorflow/core/kernels/boosted_trees/quantiles:weighted_quantiles_hdrs",
         "//tensorflow/core/kernels/data:batch_dataset_op.h",
         "//tensorflow/core/kernels/data:iterator_ops.h",
@@ -6033,7 +6126,6 @@ filegroup(
         "//tensorflow/core/kernels/data:reduce_dataset_op.h",
         "//tensorflow/core/kernels/data:repeat_dataset_op.h",
         "//tensorflow/core/kernels/data:tensor_slice_dataset_op.h",
-        "//tensorflow/core/kernels/data:unbounded_thread_pool.h",
         "//tensorflow/core/kernels/data/experimental:threadpool_dataset_op.h",
         "//tensorflow/core/kernels/image:adjust_contrast_op.h",
         "//tensorflow/core/kernels/image:adjust_hue_op.h",
@@ -6297,7 +6389,10 @@ filegroup(
         "sparse_reduce_op.cc",
         "sparse_xent_op.cc",
         "sparse_fill_empty_rows_op.cc",
+        "sparse_reorder_op.cc",
         "sparse_reshape_op.cc",
+        "sparse_slice_op.cc",
+        "sparse_tensor_dense_matmul_op.cc",
         "sparse_to_dense_op.cc",
         "spectrogram.cc",
         "spectrogram_op.cc",
@@ -6363,8 +6458,10 @@ filegroup(
         "//tensorflow/core/data:name_utils.cc",
         "//tensorflow/core/data:rewrite_utils.cc",
         "//tensorflow/core/data:root_dataset.cc",
+        "//tensorflow/core/data:serialization_utils.cc",
         "//tensorflow/core/data:split_utils.cc",
         "//tensorflow/core/data:stats_utils.cc",
+        "//tensorflow/core/data:unbounded_thread_pool.cc",
         "//tensorflow/core/kernels/data:batch_dataset_op.cc",
         "//tensorflow/core/kernels/data:iterator_ops.cc",
         "//tensorflow/core/kernels/data:finalize_dataset_op.cc",
@@ -6377,7 +6474,6 @@ filegroup(
         "//tensorflow/core/kernels/data:reduce_dataset_op.cc",
         "//tensorflow/core/kernels/data:repeat_dataset_op.cc",
         "//tensorflow/core/kernels/data:tensor_slice_dataset_op.cc",
-        "//tensorflow/core/kernels/data:unbounded_thread_pool.cc",
         # TODO(b/185903858): This should not be needed since this is part of tensorflow/core/kernels/data/experimental:portable_all_op_kernels.
         "//tensorflow/core/kernels/data/experimental:lookup_ops.cc",
         "//tensorflow/core/kernels/data/experimental:threadpool_dataset_op.cc",
@@ -7477,6 +7573,7 @@ exports_files([
     "cwise_op_select.cc",
     "cwise_op_sigmoid.cc",
     "cwise_op_sin.cc",
+    "cwise_op_sign.cc",
     "cwise_op_sqrt.cc",
     "cwise_op_square.cc",
     "cwise_op_squared_difference.cc",
